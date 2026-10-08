@@ -15,7 +15,7 @@ import pydantic
 import typer
 from loguru import logger
 
-from karotte import Runtime
+from karotte import Runtime, task_image
 from karotte.check_paths import split_loader_path
 from karotte.confinement import (
     Confinement,
@@ -362,7 +362,7 @@ def get_container_run_command(
         command.extend(
             [
                 "--mount",
-                f"type=bind,source={src_path},target=/root/.venv/lib/python3.12/site-packages/environment/",
+                f"type=bind,source={src_path},target={task_image.dev_target(task.base_image)}",
             ]
         )
 
@@ -400,11 +400,11 @@ def get_container_run_command(
     for var, value in sandbox_env().items():
         command.extend(["--env", f"{var}={value}"])
 
-    command.append("localhost/karotte" if engine == "podman" else "karotte")
+    command.append(task_image.image_ref(task_image.image_tag(task.base_image), engine))
 
     command.extend(
         [
-            "/root/.venv/bin/karotte",
+            task_image.karotte_bin(task.base_image),
             "run",
             "--no-containerized",
             *(["--prepare-only"] if prepare_only else []),

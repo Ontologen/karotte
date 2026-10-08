@@ -51,6 +51,22 @@ test-template template *run_args:
   cd {{ test_root }}/test_{{ template }} && uv run karotte run --config run_config.json --no-ui --no-proxy {{ run_args }}
   cd {{ test_root }}/test_{{ template }} && uv run python {{ justfile_directory() }}/tests/check_transcript.py out/transcript.json
 
+# `test-template` for harbor: imports the fixture's tasks, then checks the honest
+# one validates and every attack on the grading scores 0. No API key needed.
+test-harbor-template runtime="docker":
+  rm -rf {{ test_root }}/test_harbor
+  mkdir -p {{ test_root }}
+
+  uv run --frozen karotte create-env {{ test_root }}/test_harbor --template harbor --vendor-karotte
+  docker build -t karotte-harbor-fixture:1 tests/resources/harbor_fixture/image
+  printf '[[source]]\nname = "fixture"\nlocal = "{{ justfile_directory() }}/tests/resources/harbor_fixture/tasks"\npin_images = false\n' > {{ test_root }}/test_harbor/harbor.toml
+
+  cd {{ test_root }}/test_harbor && uv run karotte harbor import
+  cd {{ test_root }}/test_harbor && uv run --extra dev just lint
+  cd {{ test_root }}/test_harbor && uv run --extra dev just test
+  -cd {{ test_root }}/test_harbor && uv run karotte harbor validate --runtime {{ runtime }} --concurrency 2
+  cd {{ test_root }}/test_harbor && uv run python {{ justfile_directory() }}/tests/check_harbor_fixture.py src/environment/tasks/harbor/harbor.validation.json
+
 # `test-template` for language-toolchains
 test-toolchains-template container_cmd="docker" *run_args:
   rm -rf {{ test_root }}/test_language-toolchains

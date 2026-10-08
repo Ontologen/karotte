@@ -116,6 +116,11 @@ def mount_file_quota(
     return FileQuota(max_bytes, tuple(paths))
 
 
+def file_quota_mounted(quota_dir: Path = QUOTA_DIR) -> bool:
+    """Whether this sandbox's kernel-enforced file quota is in place."""
+    return os.path.ismount(quota_dir / _MOUNT)
+
+
 def ensure_file_quota() -> None:
     """Remount a quota whose mounts are gone, e.g. after a restore that kept
     the disk but not the kernel's mount state.

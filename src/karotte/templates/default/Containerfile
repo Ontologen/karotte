@@ -1,6 +1,8 @@
 {% block builder_stages %}{% endblock -%}
+{% block base_image -%}
 FROM docker.io/library/amazonlinux:2023.8.20250818.0
-
+{% endblock %}
+{% block harness_env -%}
 ENV KAROTTE_CONTAINERIZED=1 \
   KAROTTE_WORKDIR=/workdir \
   PYTHONUNBUFFERED=1 \
@@ -14,6 +16,7 @@ ENV KAROTTE_CONTAINERIZED=1 \
   KAROTTE_DEMOTE_ID=1000 \
   STUDENT_WORKDIR=/workdir \
   ROOT_WORKDIR=/root
+{%- endblock %}
 {%- block extra_env_vars -%}
 {% endblock %}
 
@@ -22,6 +25,7 @@ ENV KAROTTE_CONTAINERIZED=1 \
 # that dir that take precedence over the real ones, thus gaining arbitrary code execution.
 ENV PYTHONSAFEPATH=1
 
+{% block system_dependencies -%}
 RUN \
   dnf update -y && \
   dnf install -y \
@@ -71,7 +75,7 @@ RUN \
   # Cleanup
   && dnf clean all \
   && rm -rf /tmp/* /var/tmp/*
-
+{% endblock %}
 # Pre-install Python so it's available for all users.
 # uv's CPython ships without a PT_GNU_STACK header, which glibc reads as a
 # request for executable thread stacks: every thread gets an 8MB rwx mapping.
@@ -106,6 +110,7 @@ RUN groupadd -g ${KAROTTE_DEMOTE_ID} student && \
 # entries but cannot rename or remove root-owned entries like /workdir/shared/.
 RUN mkdir -p ${STUDENT_WORKDIR} && chmod 1777 ${STUDENT_WORKDIR}
 
+{% block venvs -%}
 # Build all virtual environments from their definitions. `uv_env` is an
 # optional secret: a shell file with the index credentials uv needs, if any.
 COPY venvs/ /tmp/venvs/
@@ -122,8 +127,8 @@ RUN --mount=type=secret,id=uv_env \
   && chmod 0555 $(readlink -f ${UV_PYTHON_INSTALL_DIR}/cpython-*/bin/python3) \
   \
   && rm -f /tmp/clear_execstack.py \
-  && rm -rf /tmp/venvs/ ${UV_CACHE_DIR} /tmp/uv-*.lock /root/.local/share/uv/credentials
-
+  && rm -rf /tmp/venvs/ ${UV_CACHE_DIR} /tmp/uv-*.lock ${HOME:-/root}/.local/share/uv/credentials
+{% endblock %}
 USER student
 WORKDIR ${STUDENT_WORKDIR}
 
@@ -164,25 +169,27 @@ RUN --mount=type=secret,id=uv_env \
   uv sync --python=${PYTHON_VERSION} --no-install-package environment && \
   ${ROOT_WORKDIR}/.venv/bin/karotte agents install --manifest ${ROOT_WORKDIR}/.manifest.json && \
   chmod 0644 ${ROOT_WORKDIR}/.venv/.lock && \
-  rm -rf ${UV_CACHE_DIR} /tmp/uv-*.lock /root/.local/share/uv/credentials
+  rm -rf ${UV_CACHE_DIR} /tmp/uv-*.lock ${HOME:-/root}/.local/share/uv/credentials
 
 # Install environment
 COPY src/ ${ROOT_WORKDIR}/src/
 RUN --mount=type=secret,id=uv_env \
   if [ -f /run/secrets/uv_env ]; then set -a; . /run/secrets/uv_env; set +a; fi && \
   uv pip install . \
-  && rm -rf ${UV_CACHE_DIR} /tmp/uv-*.lock /root/.local/share/uv/credentials
+  && rm -rf ${UV_CACHE_DIR} /tmp/uv-*.lock ${HOME:-/root}/.local/share/uv/credentials
 
+{% block student_python_env -%}
 # Configure the Python executable that will be used by the student
 ENV VIRTUAL_ENV=${STUDENT_WORKDIR}/.venv \
   PATH="${STUDENT_WORKDIR}/.venv/bin:$PATH"
 RUN echo -e "\033[34mStudent uses $(python --version)\033[0m"
-
+{% endblock %}
 # Lock down root-only data directories
 # This must be done AFTER all operations that create files in /root
 RUN chmod 0700 ${ROOT_WORKDIR} /root_data /intermediate_data
 
 {% for t in templates %}{% include t ~ "/partials/Containerfile.jinja" ignore missing %}{% endfor %}
+{% block karotte_check -%}
 RUN . ${ROOT_WORKDIR}/.venv/bin/activate && karotte check
-
+{% endblock %}
 WORKDIR ${STUDENT_WORKDIR}

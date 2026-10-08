@@ -26,6 +26,7 @@ from typing import IO
 
 from loguru import logger
 
+from karotte import task_image
 from karotte.confinement import (
     DISK_BUDGET_ENV_VAR,
     GIB,
@@ -162,9 +163,11 @@ def firecracker_config(
     return config
 
 
-def guest_argv(run_config: EvaluationRunConfig, prepare_only: bool) -> list[str]:
+def guest_argv(
+    run_config: EvaluationRunConfig, prepare_only: bool, karotte_bin: str = KAROTTE_BIN
+) -> list[str]:
     return [
-        KAROTTE_BIN,
+        karotte_bin,
         "run",
         "--no-containerized",
         *(["--prepare-only"] if prepare_only else []),
@@ -206,14 +209,17 @@ class GuestMount:
 
 
 def parse_mounts(
-    mounts: Sequence[str] | None, dev: bool, build_context: str
+    mounts: Sequence[str] | None,
+    dev: bool,
+    build_context: str,
+    dev_target: str = DEV_TARGET,
 ) -> list[GuestMount]:
     """``--dev`` and ``--mount`` specs as read-only guest mounts. A VM can't
     share a writable directory with the host, so read-write mounts are refused."""
     result: list[GuestMount] = []
     if dev:
         src = Path(build_context).absolute() / "src" / "environment"
-        result.append(GuestMount(src, DEV_TARGET))
+        result.append(GuestMount(src, dev_target))
     for spec in mounts or []:
         parts = spec.split(":")
         if len(parts) != 3 or parts[2] != "ro":
@@ -552,16 +558,19 @@ def run_firecracker(
     mounts: Sequence[str] | None = None,
     proxy_url: str | None = None,
     prepare_only: bool = False,
-    image: str = "karotte",
+    image: str | None = None,
     engine: str = "docker",
     parallel_runs: int = 1,
 ) -> None:
     """Run one evaluation in a Firecracker VM, like ``docker run`` of the
-    image. ``parallel_runs`` is how many runs are launched together, which
-    share the host's free disk. Raises ``CalledProcessError`` when the run
-    fails."""
+    image: by default, the one the task runs in. ``parallel_runs`` is how many
+    runs are launched together, which share the host's free disk. Raises
+    ``CalledProcessError`` when the run fails."""
     task = load_task(run_config)
-    guest_mounts = parse_mounts(mounts, dev, build_context)
+    image = image or task_image.image_tag(task.base_image)
+    guest_mounts = parse_mounts(
+        mounts, dev, build_context, task_image.dev_target(task.base_image)
+    )
     jailer = jailer_ids() if os.environ.get(JAILER_ENV_VAR) == "1" else None
     mode = network.network_mode()
     artifacts = ensure_artifacts()
@@ -631,7 +640,9 @@ def run_firecracker(
         in_dir = run.path / "io" / "in"
         write_inputs(
             in_dir,
-            argv=guest_argv(run_config, prepare_only),
+            argv=guest_argv(
+                run_config, prepare_only, task_image.karotte_bin(task.base_image)
+            ),
             env=guest_env(
                 image_config.env,
                 disk_budget_bytes=budget,

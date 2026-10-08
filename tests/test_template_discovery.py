@@ -81,9 +81,10 @@ def extra_site(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return site
 
 
-def test_karotte_ships_two_templates() -> None:
+def test_karotte_ships_three_templates() -> None:
     assert {t.id for t in load_templates(TEMPLATES_DIR)} == {
         "default",
+        "harbor",
         "language-toolchains",
     }
 

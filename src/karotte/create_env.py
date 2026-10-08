@@ -117,6 +117,22 @@ def create_env(
         raise
 
 
+def template_environment(installed: dict[str, InstalledTemplate]) -> Environment:
+    """The Jinja environment templates render in: each template's files under
+    its id, so one can extend another's, then the shared base files."""
+    return Environment(
+        loader=ChoiceLoader(
+            [
+                PrefixLoader(
+                    {id_: FileSystemLoader(t.dir) for id_, t in installed.items()}
+                ),
+                FileSystemLoader(TEMPLATES_DIR),
+            ]
+        ),
+        keep_trailing_newline=True,
+    )
+
+
 def _populate(
     output_dir: Path,
     resolved: list[str],
@@ -129,17 +145,7 @@ def _populate(
     env_name = output_dir.name
     existing_templates = {id_: t.template for id_, t in installed.items()}
 
-    jinja_env = Environment(
-        loader=ChoiceLoader(
-            [
-                PrefixLoader(
-                    {id_: FileSystemLoader(t.dir) for id_, t in installed.items()}
-                ),
-                FileSystemLoader(TEMPLATES_DIR),
-            ]
-        ),
-        keep_trailing_newline=True,
-    )
+    jinja_env = template_environment(installed)
 
     for template_name in resolved:
         template_dir = installed[template_name].dir

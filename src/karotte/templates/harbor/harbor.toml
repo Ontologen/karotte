@@ -1,0 +1,13 @@
+# Where the tasks come from. After editing, run `uv run karotte harbor import`
+# and commit src/environment/tasks/harbor/harbor.lock.json.
+#
+# A source is a git repository at a pinned commit, or a directory of this
+# environment's own (`local = "path"`). `path` is where its task directories
+# are; `include` and `exclude` are globs over their names.
+
+[[source]]
+name = "deepswe"
+repo = "https://github.com/datacurve-ai/deep-swe"
+commit = "0b9fabbb63b9104d678fe965e1632f2dd9eaa2ea"
+path = "tasks"
+include = ["*"]

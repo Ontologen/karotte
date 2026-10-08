@@ -1303,7 +1303,10 @@ def test_student_session_runs_under_a_pid_namespace_in_a_vm(
     ``--mount-proc`` gives the session a coherent view."""
     monkeypatch.setenv("KAROTTE_SANDBOX", "vm")
     monkeypatch.setenv("KAROTTE_DEMOTE_ID", "1000")
-    monkeypatch.setattr("karotte.subprocess._confinement_preexec", lambda: None)
+    monkeypatch.setattr(
+        "karotte.subprocess._confinement_preexec",
+        lambda _uid=None: None,  # pyright: ignore[reportUnknownLambdaType]
+    )
     probes = _probe_returns(monkeypatch, 0)
 
     argv, _preexec = student_session_command(["bash"], disable_networking=False)
@@ -1319,7 +1322,10 @@ def test_the_older_firecracker_name_gets_the_pid_namespace_too(
     """``KAROTTE_SANDBOX=firecracker`` is the same sandbox as ``vm``."""
     monkeypatch.setenv("KAROTTE_SANDBOX", "firecracker")
     monkeypatch.setenv("KAROTTE_DEMOTE_ID", "1000")
-    monkeypatch.setattr("karotte.subprocess._confinement_preexec", lambda: None)
+    monkeypatch.setattr(
+        "karotte.subprocess._confinement_preexec",
+        lambda _uid=None: None,  # pyright: ignore[reportUnknownLambdaType]
+    )
     _ = _probe_returns(monkeypatch, 0)
 
     argv, _preexec = student_session_command(["bash"], disable_networking=False)
@@ -1337,7 +1343,8 @@ def test_student_session_in_a_pid_namespace_joins_the_student_cgroup(
     monkeypatch.setenv("KAROTTE_DEMOTE_ID", "1000")
     order: list[str] = []
     monkeypatch.setattr(
-        "karotte.subprocess._confinement_preexec", lambda: lambda: order.append("join")
+        "karotte.subprocess._confinement_preexec",
+        lambda _uid=None: lambda: order.append("join"),  # pyright: ignore[reportUnknownLambdaType]
     )
     _ = _probe_returns(monkeypatch, 0)
 

@@ -85,6 +85,22 @@ jobs:
       - name: Test the default template
         run: just test-template default --runtime docker
 
+  # Harbor tasks end to end on docker, with the fake model: an honest fixture
+  # task validates and every attack on the grading scores 0. No API key needed.
+  harbor-template:
+    name: Harbor Template Tests
+    runs-on: karotte-ci
+    timeout-minutes: 60
+    steps:
+      - name: Check out code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - name: Install just
+        uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+      - name: Test the harbor template
+        run: just test-harbor-template docker
+
   # The default template end to end in a Firecracker microVM, once as a user
   # and once through the jailer (under sudo). It needs /dev/kvm, which
   # GitHub's hosted Ubuntu runners provide.
@@ -147,7 +163,7 @@ jobs:
 
   build:
     name: Build
-    needs: [lint, core-tests, root-tests, default-template, firecracker-template]
+    needs: [lint, core-tests, root-tests, default-template, harbor-template, firecracker-template]
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 10

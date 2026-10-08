@@ -57,7 +57,8 @@ If the values add up, Karotte uses all of them.
 | `karotte.default_proxy_url`                                                                   | The first by name wins.                                                                                                 |
 | `karotte.harness_secret_env`, `karotte.platform_tooling_dirs`, `karotte.age_delay_exemptions` | Karotte merges the lists.                                                                                               |
 | `karotte.update_migrations`                                                                   | All of them run, in installation order (not sorted by name). For `tool`, the first one that doesn't return `None` wins. |
-| `karotte.default_hardware`, `karotte.hardware_limits`                                         | The first by name wins.                                                                                                 |
+| `karotte.default_hardware`                                                                    | The first by name wins.                                                                                                 |
+| `karotte.hardware_limits`                                                                     | The first by name that knows the hardware, returning anything but `None`, wins.                                        |
 | `karotte.container_run_args`                                                                  | All of them run, in entry point name order, and Karotte concatenates their arguments.                                   |
 
 ## When a plugin fails to load
@@ -155,6 +156,9 @@ def hardware_limits(hardware: str) -> HardwareLimits | None:
         return HardwareLimits(passthrough=True)
     return None
 ```
+
+Karotte asks the plugins in entry point name order, and the first answer that isn't `None` wins, so each plugin can own its own names.
+Karotte itself registers one, `harbor`, which knows the `harbor-c<cpus>-m<MiB>-d<MiB>` names of [Harbor tasks](../environments/harbor.md).
 
 A hardware name that no plugin knows is not an error.
 Karotte just uses its defaults.

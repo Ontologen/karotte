@@ -130,6 +130,8 @@ class Observations:
     vm_launcher: str | None = None
     """The karotte runtime that launched this VM, ``None`` for any other launcher."""
     left_behind: list[str] = field(default_factory=list)
+    link_protections: dict[str, int | None] = field(default_factory=dict)
+    """``fs.protected_*`` as the kernel has them, ``None`` where unreadable."""
 
 
 @dataclass(frozen=True)
@@ -298,10 +300,34 @@ def evaluate(obs: Observations) -> list[Finding]:
             _ram_finding(obs, obs.ram_bytes, obs.student_memory_default, expect)
         )
 
+    if obs.link_protections:
+        findings.append(_link_protection_finding(obs.link_protections))
+
     findings.append(
         Finding("left behind", "; ".join(obs.left_behind) or "nothing", None)
     )
     return findings
+
+
+_LINK_PROTECTIONS = ("hardlinks", "symlinks", "fifos", "regular")
+_PROC_SYS_FS = Path("/proc/sys/fs")
+
+
+def _read_link_protections(proc_sys_fs: Path = _PROC_SYS_FS) -> dict[str, int | None]:
+    values: dict[str, int | None] = {}
+    for name in _LINK_PROTECTIONS:
+        try:
+            values[name] = int((proc_sys_fs / f"protected_{name}").read_text())
+        except (OSError, ValueError):
+            values[name] = None
+    return values
+
+
+def _link_protection_finding(values: dict[str, int | None]) -> Finding:
+    """Off, the student can hard-link a root-only file into a tree root later
+    copies, or leave a symlink for root to follow."""
+    shown = " ".join(f"{name}={value}" for name, value in values.items())
+    return Finding("link protections (fs.protected_*)", shown, all(values.values()))
 
 
 def _ram_finding(
@@ -444,6 +470,8 @@ def gather(hardware: str | None) -> Observations:
         _probe_session(obs, student_uid, group_existed)
     else:
         obs.session.error = "no student uid to run a session as"
+
+    obs.link_protections = _read_link_protections()
 
     obs.left_behind += [
         f"{step}, as every run in this sandbox does" for step in guest_setup

@@ -437,7 +437,9 @@ def test_uv_credential_store_is_dropped_in_the_step_that_writes_it(tmp_path: Pat
     uv_steps = [s for s in steps if "id=uv_env" in s]
     assert len(uv_steps) == 3
     for step in uv_steps:
-        assert re.search(r"rm -rf [^&]*/root/\.local/share/uv/credentials", step), step
+        assert re.search(
+            r"rm -rf [^&]*\$\{HOME:-/root\}/\.local/share/uv/credentials", step
+        ), step
     (check,) = [s for s in steps if "karotte check" in s]
     assert "rm " not in check
 

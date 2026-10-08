@@ -509,3 +509,26 @@ def test_left_behind_is_reported(tmp_path: Path) -> None:
     obs = _vm_observations(left_behind=[f"probe quota mounts under {tmp_path}"])
     finding = next(f for f in evaluate(obs) if f.name == "left behind")
     assert str(tmp_path) in finding.value
+
+
+class TestLinkProtections:
+    def test_all_on_passes(self, tmp_path: Path):
+        for name in ("hardlinks", "symlinks", "fifos", "regular"):
+            (tmp_path / f"protected_{name}").write_text("1\n")
+        values = confinement_check._read_link_protections(tmp_path)  # pyright: ignore[reportPrivateUsage]
+        finding = confinement_check._link_protection_finding(values)  # pyright: ignore[reportPrivateUsage]
+        assert finding.ok is True
+
+    def test_hard_links_off_fails(self, tmp_path: Path):
+        """A student could hard-link a root-only file into its submission."""
+        for name in ("symlinks", "fifos", "regular"):
+            (tmp_path / f"protected_{name}").write_text("1\n")
+        (tmp_path / "protected_hardlinks").write_text("0\n")
+        values = confinement_check._read_link_protections(tmp_path)  # pyright: ignore[reportPrivateUsage]
+        finding = confinement_check._link_protection_finding(values)  # pyright: ignore[reportPrivateUsage]
+        assert finding.ok is False
+        assert "hardlinks=0" in finding.value
+
+    def test_unreadable_values_fail(self, tmp_path: Path):
+        values = confinement_check._read_link_protections(tmp_path)  # pyright: ignore[reportPrivateUsage]
+        assert confinement_check._link_protection_finding(values).ok is False  # pyright: ignore[reportPrivateUsage]

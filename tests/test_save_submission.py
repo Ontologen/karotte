@@ -359,3 +359,26 @@ def test_partial_dest_is_removed_on_failure(source: Path, dest: Path):
         save_submission(source, dest)
 
     assert not dest.exists()
+
+
+def test_a_file_the_submitter_owns_is_copied_when_owners_are_checked(
+    tmp_path: Path, dest: Path
+):
+    patch = tmp_path / "model.patch"
+    patch.write_text("diff")
+
+    save_submission(patch, dest, owner_uid=os.getuid())
+
+    assert dest.read_text() == "diff"
+
+
+def test_a_file_someone_else_owns_is_misbehavior_when_owners_are_checked(
+    tmp_path: Path, dest: Path
+):
+    """A hard link to a root-only file is owned by root, not the student."""
+    patch = tmp_path / "model.patch"
+    patch.write_text("secret")
+
+    with pytest.raises(StudentMisbehaviorError, match="owned by uid"):
+        save_submission(patch, dest, owner_uid=os.getuid() + 1)
+    assert not dest.exists()

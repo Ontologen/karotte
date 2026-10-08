@@ -1,0 +1,308 @@
+# Language toolchains are built here and nowhere else. Several cannot be
+# unpacked into a usable state without a C compiler on hand, so this stage has
+# gcc and make and the final image copies out only /opt/toolchains — which is
+# what keeps the student's image free of a compiler until a task asks for one.
+#
+# Which languages are built is decided by src/environment/toolchain_config.py;
+# with none enabled this stage produces an empty /opt/toolchains.
+FROM docker.io/library/amazonlinux:2023.8.20250818.0 AS toolchains
+
+RUN dnf install -y \
+  gcc gcc-c++ make \
+  curl-minimal tar gzip xz unzip findutils \
+  # The image's own `python3` is 3.9, which is older than the code below.
+  python3.12 \
+  # GHC's `make install` runs the compiler it just unpacked, which wants these.
+  gmp-devel ncurses-libs numactl-libs libffi \
+  # Erlang has no binary distribution for this platform, so OTP is compiled
+  # here. Its configure wants a termcap, and its build drives perl.
+  ncurses-devel perl \
+  # The .NET SDK will not start without an ICU, and the C# installer runs it
+  # here to fill the package cache a task's offline build restores from.
+  libicu \
+  # jlink, which the JVM cells' compiler-free runtimes are linked with, and the
+  # jmods it links them from — the RPM JDK carries none. Both stay in this
+  # stage; what reaches the image is the linked runtime. Keep the major in step
+  # with toolchains.JVM_JDK.
+  java-24-amazon-corretto-devel java-24-amazon-corretto-jmods \
+  && dnf clean all
+
+# toolchains.py finds toolchain_config.py beside itself, so both go together.
+COPY src/environment/toolchains.py src/environment/toolchain_config.py /tmp/toolchains/
+RUN python3.12 /tmp/toolchains/toolchains.py archives && rm -rf /tmp/toolchain_build /tmp/toolchains
+
+# The confinement a compiled run gets, and the probe that checks it holds. Both
+# are built here because this is the only stage with a C compiler — keeping one
+# out of the student's image is the point of the split.
+#
+# Three shims from the one source: the strict one, the one a cell whose runtime
+# maps its own code out of the artifact gets, and the one a cell whose runtime
+# compiles as it runs gets (see shim.c).
+COPY src/environment/shim.c src/environment/sandbox_probe.c /tmp/sandbox/
+RUN mkdir -p /opt/grader-bin \
+  && gcc -shared -fPIC -O2 -Wall -Wextra -Werror \
+  -o /opt/grader-bin/sandbox_shim.so /tmp/sandbox/shim.c \
+  && gcc -shared -fPIC -O2 -Wall -Wextra -Werror -DALLOW_MAPPED_CODE \
+  -o /opt/grader-bin/sandbox_shim_mapped.so /tmp/sandbox/shim.c \
+  && gcc -shared -fPIC -O2 -Wall -Wextra -Werror -DALLOW_JIT \
+  -o /opt/grader-bin/sandbox_shim_jit.so /tmp/sandbox/shim.c \
+  && gcc -O2 -Wall -Wextra -Werror \
+  -o /opt/grader-bin/sandbox_probe /tmp/sandbox/sandbox_probe.c \
+  && rm -rf /tmp/sandbox
+
+FROM docker.io/library/amazonlinux:2023.8.20250818.0
+
+ENV KAROTTE_CONTAINERIZED=1 \
+  KAROTTE_WORKDIR=/workdir \
+  PYTHONUNBUFFERED=1 \
+  UV_VERSION=0.11.32 \
+  UV_INSTALL_DIR=/opt/uv \
+  PATH="/opt/uv/:$PATH" \
+  UV_CACHE_DIR="/root/.cache/uv" \
+  UV_LINK_MODE=copy \
+  UV_PYTHON_INSTALL_DIR=/opt/uv/python \
+  PYTHON_VERSION=3.12.11 \
+  KAROTTE_DEMOTE_ID=1000 \
+  STUDENT_WORKDIR=/workdir \
+  ROOT_WORKDIR=/root\
+  # Without one, a shell in here has whatever locale its launcher happened to
+  # leak in, and a runtime that takes its default encoding from the locale —
+  # Ruby, the BEAM, the JVM — answers differently depending on who started the
+  # container.
+  LC_CTYPE=C.UTF-8
+
+
+# Prevents the CWD from being prepended to sys.path when running python. Without this, if the judge's python process
+# happens to have its CWD set to a dir that the student can write to, the student will be able to create modules in
+# that dir that take precedence over the real ones, thus gaining arbitrary code execution.
+ENV PYTHONSAFEPATH=1
+
+RUN \
+  dnf update -y && \
+  dnf install -y \
+  # Provides `groupadd` and `useradd`
+  shadow-utils \
+  # Provides `find`
+  findutils \
+  which \
+  # Allows setting up firewall so student user can't access network
+  iptables \
+  # Legacy iptables for gvisor compatibility (gvisor doesn't support nftables).
+  # On Amazon Linux, installing this switches the iptables alternative to legacy;
+  # we restore it to nft below so non-gvisor containers keep working.
+  iptables-legacy \
+  # Provides `ps` and `pkill`
+  procps-ng \
+  # Provides `lscpu`
+  util-linux \
+  # Provides `cmp` and `diff` for file comparison
+  diffutils \
+  # Provides `/usr/bin/time` for timing command execution
+  time \
+  # Provides `jq` for JSON querying and formatting
+  jq \
+  # Provides `strace` for tracing system calls
+  strace \
+  # Provides `tree` for visualizing directory structures
+  tree \
+  # Provides `strings` and other binary inspection tools like objdump, nm, readelf
+  binutils \
+  # Provides `mkfs.ext4` for loop-mounted student disk quotas
+  e2fsprogs \
+  # Provides `dnf download`, which stages each language's RPMs below
+dnf-plugins-core \
+  # Unpackers for the toolchain archives that are not tar.gz
+  xz \
+  unzip \
+  # Shared libraries the copied-in toolchains link against. None is a compiler.
+  gmp-devel \
+  ncurses-libs \
+  numactl-libs \
+  libffi \
+  libxml2 \
+  libedit \
+  libuuid \
+  sqlite-libs \
+  libicu \
+  zlib \
+  \
+# Restore iptables alternative to nf_tables (iptables-legacy switches it)
+&& alternatives --set iptables /usr/sbin/iptables-nft \
+  && (alternatives --set ip6tables /usr/sbin/ip6tables-nft 2>/dev/null; ln -sf iptables-nft /usr/sbin/ip6tables) \
+  \
+  # Install uv
+  && dnf install -y curl-minimal tar gzip \
+  && curl -LsSf https://astral.sh/uv/${UV_VERSION}/install.sh | sh \
+  # The uv binary, after extraction, is owned by user 1001 and group 117 due to a quirk of tar preserving the original \
+  # uid/gid when the archive was built. We change it back to root to prevent tampering \
+  && chown -R root:root /opt/uv \
+  \
+  # Cleanup
+  && dnf clean all \
+  && rm -rf /tmp/* /var/tmp/*
+
+# Pre-install Python so it's available for all users.
+# uv's CPython ships without a PT_GNU_STACK header, which glibc reads as a
+# request for executable thread stacks: every thread gets an 8MB rwx mapping.
+COPY scripts/clear_execstack.py /tmp/clear_execstack.py
+RUN uv python install --no-bin ${PYTHON_VERSION} \
+  && chmod 0644 ${UV_PYTHON_INSTALL_DIR}/.lock \
+  && uv run --python=${PYTHON_VERSION} /tmp/clear_execstack.py \
+  ${UV_PYTHON_INSTALL_DIR}/cpython-${PYTHON_VERSION}-*/bin/python3 \
+  && chmod 0555 $(readlink -f ${UV_PYTHON_INSTALL_DIR}/cpython-${PYTHON_VERSION}-*/bin/python3) \
+  && rm -rf ${UV_CACHE_DIR} /tmp/uv-*.lock /tmp/clear_execstack.py
+
+# One directory per language, all sealed shut. A task's `pre_hook` opens exactly
+# one; until then the image has no compiler on PATH.
+#
+# The RPM half is staged here rather than in the builder stage: `dnf download
+# --resolve` stages what the rpm database it runs against is missing, so it has
+# to run against this image's, after every other dnf install and with nothing
+# installed between.
+# The copy is one line per language for better caching and faster compression.
+COPY --from=toolchains /opt/toolchains/assembly /opt/toolchains/assembly
+COPY --from=toolchains /opt/toolchains/c_cpp /opt/toolchains/c_cpp
+COPY --from=toolchains /opt/toolchains/clojure /opt/toolchains/clojure
+COPY --from=toolchains /opt/toolchains/cobol /opt/toolchains/cobol
+COPY --from=toolchains /opt/toolchains/csharp /opt/toolchains/csharp
+COPY --from=toolchains /opt/toolchains/dart /opt/toolchains/dart
+COPY --from=toolchains /opt/toolchains/erlang_elixir /opt/toolchains/erlang_elixir
+COPY --from=toolchains /opt/toolchains/fortran /opt/toolchains/fortran
+COPY --from=toolchains /opt/toolchains/go /opt/toolchains/go
+COPY --from=toolchains /opt/toolchains/haskell /opt/toolchains/haskell
+COPY --from=toolchains /opt/toolchains/java /opt/toolchains/java
+COPY --from=toolchains /opt/toolchains/js_ts /opt/toolchains/js_ts
+COPY --from=toolchains /opt/toolchains/julia /opt/toolchains/julia
+COPY --from=toolchains /opt/toolchains/kotlin /opt/toolchains/kotlin
+COPY --from=toolchains /opt/toolchains/llvm_ir /opt/toolchains/llvm_ir
+COPY --from=toolchains /opt/toolchains/mojo /opt/toolchains/mojo
+COPY --from=toolchains /opt/toolchains/ocaml /opt/toolchains/ocaml
+COPY --from=toolchains /opt/toolchains/pascal /opt/toolchains/pascal
+COPY --from=toolchains /opt/toolchains/prolog /opt/toolchains/prolog
+COPY --from=toolchains /opt/toolchains/python /opt/toolchains/python
+COPY --from=toolchains /opt/toolchains/ruby /opt/toolchains/ruby
+COPY --from=toolchains /opt/toolchains/rust /opt/toolchains/rust
+COPY --from=toolchains /opt/toolchains/scala /opt/toolchains/scala
+COPY --from=toolchains /opt/toolchains/swift /opt/toolchains/swift
+COPY --from=toolchains /opt/toolchains/zig /opt/toolchains/zig
+# The confinement a compiled run gets, and the probe that checks it holds.
+COPY --from=toolchains /opt/grader-bin/ /opt/grader/
+COPY src/environment/toolchains.py src/environment/toolchain_config.py /tmp/toolchains/
+# The image's own `python3` is 3.9; uv's is the 3.12 the rest of this runs under.
+RUN uv run --python=${PYTHON_VERSION} /tmp/toolchains/toolchains.py rpms \
+  && rm -rf /tmp/toolchains \
+  && dnf clean all
+
+# Where graders build submissions (see environment/toolchain_grading.py):
+# outside /opt/toolchains so sealing leaves grader artifacts alone, 0711 so a
+# demoted build can reach its own random-named subdirectory without being able
+# to list what else is there.
+#
+# The shim and its probe were copied in above: root-owned and unwritable,
+# reachable by name from a demoted run because the directory is traversable.
+COPY src/environment/shim.c src/environment/sandbox.py /opt/grader/
+RUN mkdir -p /opt/grader && chmod 0711 /opt/grader \
+  && chmod 0555 /opt/grader/sandbox_shim.so /opt/grader/sandbox_shim_mapped.so \
+  /opt/grader/sandbox_shim_jit.so /opt/grader/sandbox_probe \
+  && chmod 0444 /opt/grader/shim.c /opt/grader/sandbox.py
+
+# Set up a user for the student.
+# -M: don't create home directry (we create STUDENT_WORKDIR later as root)
+# -d: set home directory in /etc/passwd to STUDENT_WORKDIR
+# Tools use the demote ID to run as the student user, e.g., for executing shell commands.
+RUN groupadd -g ${KAROTTE_DEMOTE_ID} student && \
+  # shadow-utils ships CREATE_MAIL_SPOOL=yes, which would give the student a
+  # file they own and can drop anything into (including executables) at
+  # /var/spool/mail/student. Nothing here wants a mail spool.
+  sed -i 's/^CREATE_MAIL_SPOOL=.*/CREATE_MAIL_SPOOL=no/' /etc/default/useradd && \
+  useradd -M -d ${STUDENT_WORKDIR} -u ${KAROTTE_DEMOTE_ID} -g ${KAROTTE_DEMOTE_ID} student && \
+  gpasswd -d student root 2>/dev/null || true && \
+  # Remove subordinate UID/GID ranges so the student cannot use user namespaces
+  # to remap to a different host UID and bypass iptables uid-owner rules.
+  sed -i '/^student:/d' /etc/subuid /etc/subgid
+
+# Set up the working directory for the student.
+# Root-owned with sticky bit (1777) so the student can create/delete their own
+# entries but cannot rename or remove root-owned entries like /workdir/shared/.
+RUN mkdir -p ${STUDENT_WORKDIR} && chmod 1777 ${STUDENT_WORKDIR}
+
+# Build all virtual environments from their definitions. `uv_env` is an
+# optional secret: a shell file with the index credentials uv needs, if any.
+COPY venvs/ /tmp/venvs/
+# Copied again: build steps above may clear /tmp.
+COPY scripts/clear_execstack.py /tmp/clear_execstack.py
+RUN --mount=type=secret,id=uv_env \
+  if [ -f /run/secrets/uv_env ]; then set -a; . /run/secrets/uv_env; set +a; fi && \
+  uv run --python=${PYTHON_VERSION} /tmp/venvs/build_venvs.py /tmp/venvs/ \
+  \
+  # A venv pinned to another Python minor leaves a second managed CPython here at
+  # uv's default 755. Glob every interpreter, like `environment.interpreter_checks`.
+  && uv run --python=${PYTHON_VERSION} /tmp/clear_execstack.py \
+  ${UV_PYTHON_INSTALL_DIR}/cpython-*/bin/python3 \
+  && chmod 0555 $(readlink -f ${UV_PYTHON_INSTALL_DIR}/cpython-*/bin/python3) \
+  \
+  && rm -f /tmp/clear_execstack.py \
+  && rm -rf /tmp/venvs/ ${UV_CACHE_DIR} /tmp/uv-*.lock ${HOME:-/root}/.local/share/uv/credentials
+
+USER student
+WORKDIR ${STUDENT_WORKDIR}
+
+# Copy student data
+COPY --chown=student student_data/ ${STUDENT_WORKDIR}/data/
+
+# Set up the environment
+USER root
+WORKDIR ${ROOT_WORKDIR}
+
+# Create data directories
+RUN mkdir /root_data && chmod 0700 /root_data && \
+  mkdir /intermediate_data && chmod 700 /intermediate_data
+
+# Copy root data
+COPY --chown=root root_data/ /root_data/
+
+# Copy intermediate data
+COPY --chown=root intermediate_data/ /intermediate_data/
+
+# Copy shared data
+COPY --chown=root --chmod=444 shared_data/ ${STUDENT_WORKDIR}/shared/
+
+# Lock down shared directory
+# The student user can read files but cannot modify, delete, or create new files
+RUN chmod 1755 ${STUDENT_WORKDIR}/shared && \
+  find ${STUDENT_WORKDIR}/shared -mindepth 1 -type d -exec chmod 555 {} \;
+
+# Copy vendored karotte if present
+COPY .karotte/ ${ROOT_WORKDIR}/.karotte/
+
+# Install dependencies before environment code for better layer caching. This
+# includes any CLI coding agents named in the manifest: each agent class owns
+# its install recipe and karotte pins the version (a no-op when none are listed).
+COPY pyproject.toml uv.lock .manifest.json ${ROOT_WORKDIR}/
+RUN --mount=type=secret,id=uv_env \
+  if [ -f /run/secrets/uv_env ]; then set -a; . /run/secrets/uv_env; set +a; fi && \
+  uv sync --python=${PYTHON_VERSION} --no-install-package environment && \
+  ${ROOT_WORKDIR}/.venv/bin/karotte agents install --manifest ${ROOT_WORKDIR}/.manifest.json && \
+  chmod 0644 ${ROOT_WORKDIR}/.venv/.lock && \
+  rm -rf ${UV_CACHE_DIR} /tmp/uv-*.lock ${HOME:-/root}/.local/share/uv/credentials
+
+# Install environment
+COPY src/ ${ROOT_WORKDIR}/src/
+RUN --mount=type=secret,id=uv_env \
+  if [ -f /run/secrets/uv_env ]; then set -a; . /run/secrets/uv_env; set +a; fi && \
+  uv pip install . \
+  && rm -rf ${UV_CACHE_DIR} /tmp/uv-*.lock ${HOME:-/root}/.local/share/uv/credentials
+
+# Configure the Python executable that will be used by the student
+ENV VIRTUAL_ENV=${STUDENT_WORKDIR}/.venv \
+  PATH="${STUDENT_WORKDIR}/.venv/bin:$PATH"
+RUN echo -e "\033[34mStudent uses $(python --version)\033[0m"
+
+# Lock down root-only data directories
+# This must be done AFTER all operations that create files in /root
+RUN chmod 0700 ${ROOT_WORKDIR} /root_data /intermediate_data
+
+
+RUN . ${ROOT_WORKDIR}/.venv/bin/activate && karotte check
+
+WORKDIR ${STUDENT_WORKDIR}

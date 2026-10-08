@@ -2,12 +2,13 @@
 
 A template is a directory of files.
 `karotte create-env` renders those files with [Jinja](https://jinja.palletsprojects.com/) to make a new environment.
-Karotte ships two templates:
+Karotte ships three templates:
 
 | Template              | What it gives you                                                                                                           |
 | --------------------- | --------------------------------------------------------------------------------------------------------------------------- |
 | `default`             | A CPU environment with an example task. Every other template builds on it.                                                  |
 | `language-toolchains` | Experimental. Gives the student exactly one language toolchain per task. See [Language toolchains](language-toolchains.md). |
+| `harbor`              | Experimental. Runs tasks from Harbor-format benchmarks, such as DeepSWE, each on its own image. See [Harbor tasks](harbor.md). |
 
 `karotte templates list` shows every installed template, including those from [template packages](../extending/template-packages.md).
 It also shows which templates each one requires.
@@ -17,6 +18,8 @@ Add `--json` to get the same list as JSON.
 $ karotte templates list
 Available templates:
   default — A CPU environment with an example task.
+  harbor — Runs tasks imported from Harbor-format benchmarks (such as DeepSWE), each on its own image, with hardened test-based grading.
+    Requires: default
   language-toolchains — Securely provide exactly one language toolchain to the student. Used by environments that vary tasks by programming language.
     Requires: default
 ```

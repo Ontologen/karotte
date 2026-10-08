@@ -31,7 +31,26 @@ REQUIRED_IMAGE_ENV = ("KAROTTE_CONTAINERIZED", "KAROTTE_DEMOTE_ID")
 _SPARSE_BYTES = 1 << 40
 """Size of the file the base filesystem is made in before it's shrunk."""
 
-_KEEP_BASE_DRIVES = 4
+KEEP_BASE_DRIVES_ENV_VAR = "KAROTTE_FIRECRACKER_KEEP_BASE_DRIVES"
+_DEFAULT_KEEP_BASE_DRIVES = 4
+"""Base drives kept in the cache, newest first. Raise it for suites whose tasks
+each run in their own image, so drives aren't rebuilt between runs."""
+
+
+def _keep_base_drives() -> int:
+    raw = os.environ.get(KEEP_BASE_DRIVES_ENV_VAR)
+    if raw is None:
+        return _DEFAULT_KEEP_BASE_DRIVES
+    try:
+        keep = int(raw)
+    except ValueError:
+        keep = 0
+    if keep < 1:
+        raise RootfsError(
+            f"{KEEP_BASE_DRIVES_ENV_VAR} must be a positive integer, got {raw!r}"
+        )
+    return keep
+
 
 _IMAGE_ARCH = {"amd64": "x86_64", "arm64": "aarch64"}
 
@@ -225,7 +244,7 @@ def _evict_old(directory: Path, keep: Path) -> None:
     drives = sorted(
         directory.glob("*.ext4"), key=lambda p: p.stat().st_mtime, reverse=True
     )
-    for old in drives[_KEEP_BASE_DRIVES:]:
+    for old in drives[_keep_base_drives() :]:
         if old != keep:
             logger.info(f"Removing old base drive {old}")
             old.unlink(missing_ok=True)

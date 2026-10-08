@@ -135,3 +135,25 @@ It is up to a [plugin](../extending/plugins.md#karottehardware_limits) to define
 def required_hardware(self) -> str | None:
     return "my-gpu"
 ```
+
+## Base image
+
+`base_image` builds the task's sandbox on an image of its own instead of the environment's base, keeping that image's toolchains and files.
+Karotte adds its harness, the student user and its checks on top.
+The environment's `Containerfile` must take the base as `ARG BASE_IMAGE`, as the [`harbor` template's](../environments/harbor.md) does; `karotte build` refuses a mismatch either way.
+
+```python
+from karotte import BaseImage
+
+
+@property
+def base_image(self) -> BaseImage | None:
+    return BaseImage(
+        ref="registry.example/task:v1@sha256:...",  # pin the digest
+        platform="linux/amd64",
+        workdir="/app",  # the student owns it; grading restores it
+    )
+```
+
+Tasks that share a base share an image, and `karotte build` builds one image per base.
+Like `required_hardware`, it is read with a placeholder run config, so it must not depend on the config.

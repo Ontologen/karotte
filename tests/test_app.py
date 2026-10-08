@@ -2,11 +2,13 @@ import asyncio
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from textual.pilot import Pilot
 from textual.widgets import TextArea
 
+from karotte.schemas.evaluation_run_config import EvaluationRunConfig
 from karotte.schemas.transcript import (
     TaskCompletedEvent,
     TaskStartedEvent,
@@ -940,14 +942,22 @@ def test_build_passes_cache_options(monkeypatch: pytest.MonkeyPatch):
         return ["true"]
 
     monkeypatch.setattr(app_module, "get_container_build_command", fake_build_command)
+    monkeypatch.setattr(
+        app_module,
+        "load_task",
+        lambda _config: SimpleNamespace(id="t", base_image=None),  # pyright: ignore[reportUnknownLambdaType]
+    )
     app = KarotteApp(transcripts=[Transcript(run_id="r", events=[])])
     app.cache_from = ["type=registry,ref=repo:cache"]
     app.cache_to = ["type=registry,ref=repo:cache,mode=max"]
+    config = EvaluationRunConfig(run_id="r", task_id="t", model="m", model_api_key="k")
 
-    app._build_container("docker", ".")  # pyright: ignore[reportPrivateUsage]
+    app._build_container("docker", config, ".")  # pyright: ignore[reportPrivateUsage]
 
     assert captured["cache_from"] == ["type=registry,ref=repo:cache"]
     assert captured["cache_to"] == ["type=registry,ref=repo:cache,mode=max"]
+    assert captured["tag"] == "karotte"
+    assert captured["build_args"] == {}
 
 
 @pytest.mark.asyncio

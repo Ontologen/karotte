@@ -4,9 +4,10 @@ Apple silicon).
 The guest has its own kernel, so karotte runs it as the `vm` sandbox. What
 differs from docker/podman:
 - Bind mounts are virtiofs, which ignores guest ownership and mode, so every
-  mount sits under root's 0700 home: the transcript at ``/root/out``, user
-  mounts at ``/root/.karotte_mounts/<n>`` (copied into place by karotte in the
-  guest, see ``karotte.staged_mounts``).
+  mount sits under root's 0700 home (``/root``, or ``/karotte`` in an image
+  built on a task's base): the transcript at ``<home>/out``, user mounts at
+  ``<home>/.karotte_mounts/<n>`` (copied into place by karotte in the guest,
+  see ``karotte.staged_mounts``).
 - The rootfs is a sparse 512 GiB file, so the launcher passes the student's
   disk budget, sized from the host's real free space.
 - A guest that livelocks blocks every `container` command on the Mac, so a
@@ -33,6 +34,7 @@ from typing import Any, Literal, Never, final
 import typer
 from loguru import logger
 
+from karotte import task_image
 from karotte.confinement import (
     _FREE_DISK_FRACTION,  # pyright: ignore[reportPrivateUsage]
     DISK_BUDGET_ENV_VAR,
@@ -49,7 +51,6 @@ from karotte.staged_mounts import STAGED_MOUNTS_ENV_VAR, StagedMount, encode
 from karotte.task import Task
 
 CONTAINER = "container"
-IMAGE = "karotte"
 NAME_PREFIX = "karotte_run_"
 BUILDER_ID = "buildkit"
 """Apple's image builder, listed next to our containers."""
@@ -58,9 +59,9 @@ MIN_MACOS_MAJOR = 26
 MIN_VERSION = (1, 4, 1)
 
 
-TRANSCRIPT_DIR = "/root/out"
-STAGED_MOUNTS_DIR = "/root/.karotte_mounts"
-DEV_SRC_TARGET = "/root/.venv/lib/python3.12/site-packages/environment/"
+TRANSCRIPT_DIR = "out"
+STAGED_MOUNTS_DIR = ".karotte_mounts"
+"""Under root's home, whose 0700 keeps them from the student."""
 
 APP_ROOT = Path.home() / "Library" / "Application Support" / "com.apple.container"
 VM_PROCESS_NAME = "com.apple.Virtualization.VirtualMachine"
@@ -80,9 +81,12 @@ def get_run_command(
     parallel_runs: int = 1,
 ) -> tuple[list[str], EvaluationRunConfig]:
     """The `container run` command for one run, and the config as the guest
-    sees it (transcript path moved under ``/root/out``). ``parallel_runs`` is
+    sees it (transcript path moved under ``<home>/out``). ``parallel_runs`` is
     how many runs are launched together, which share the host's free disk."""
     size = vm_resources(task.required_hardware)
+    image = task_image.image_tag(task.base_image)
+    home = task_image.harness_home(task.base_image)
+    transcript_dir = f"{home}/{TRANSCRIPT_DIR}"
     command = [
         CONTAINER,
         "run",
@@ -109,7 +113,7 @@ def get_run_command(
         f"{size.vm_memory_bytes // 1024**2}M",
     ]
 
-    if platform_flag := image_platform(IMAGE):
+    if platform_flag := image_platform(image):
         command.extend(["--platform", platform_flag])
 
     # `--publish` binds every interface unless given an address.
@@ -123,7 +127,10 @@ def get_run_command(
     if dev:
         src_path = Path(build_context).absolute() / "src" / "environment"
         command.extend(
-            ["--mount", f"type=bind,source={src_path},target={DEV_SRC_TARGET}"]
+            [
+                "--mount",
+                f"type=bind,source={src_path},target={task_image.dev_target(task.base_image)}",
+            ]
         )
 
     staged: list[StagedMount] = []
@@ -131,7 +138,7 @@ def get_run_command(
         parts = spec.split(":")
         source = Path(parts[0]).absolute()
         writable = not (len(parts) == 3 and parts[2] == "ro")
-        staging = f"{STAGED_MOUNTS_DIR}/{index}"
+        staging = f"{home}/{STAGED_MOUNTS_DIR}/{index}"
         # virtiofs shares directories; a file comes in through a directory of
         # its own, not its parent, which would share its siblings too.
         if source.is_dir():
@@ -153,11 +160,11 @@ def get_run_command(
         command.extend(
             [
                 "--mount",
-                f"type=bind,source={file_path.parent},target={TRANSCRIPT_DIR}",
+                f"type=bind,source={file_path.parent},target={transcript_dir}",
             ]
         )
         run_config = run_config.model_copy(
-            update={"transcript_file": f"{TRANSCRIPT_DIR}/{file_path.name}"}
+            update={"transcript_file": f"{transcript_dir}/{file_path.name}"}
         )
 
     if proxy_url:
@@ -167,10 +174,10 @@ def get_run_command(
     for var, value in sandbox_env().items():
         command.extend(["--env", f"{var}={value}"])
 
-    command.append(IMAGE)
+    command.append(image)
     command.extend(
         [
-            "/root/.venv/bin/karotte",
+            task_image.karotte_bin(task.base_image),
             "run",
             "--no-containerized",
             *(["--prepare-only"] if prepare_only else []),

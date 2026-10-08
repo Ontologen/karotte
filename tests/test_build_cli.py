@@ -1,11 +1,15 @@
 import sys
 from collections.abc import Iterator
+from pathlib import Path
+from typing import ClassVar
 from unittest.mock import patch
 
 import pytest
 import typer
 
 from karotte.cli.build import build
+from karotte.schemas.base_image import BaseImage
+from karotte.task_image import image_tag
 
 
 @pytest.fixture(autouse=True)
@@ -120,6 +124,7 @@ class TestBuildCommand:
             class FakeTask:
                 id: str = task_id
                 required_hardware: str | None = hw
+                base_image: object = None
 
                 def __init__(self, config: object) -> None:
                     del config
@@ -187,6 +192,8 @@ class TestBuildCommand:
             cache_from=None,
             cache_to=None,
             build_secrets=(),
+            build_args={},
+            platform=None,
         )
 
     def test_calls_build_container_with_custom_runtime(self):
@@ -200,6 +207,8 @@ class TestBuildCommand:
             cache_from=None,
             cache_to=None,
             build_secrets=(),
+            build_args={},
+            platform=None,
         )
 
     def test_calls_build_container_with_custom_tag(self):
@@ -213,6 +222,8 @@ class TestBuildCommand:
             cache_from=None,
             cache_to=None,
             build_secrets=(),
+            build_args={},
+            platform=None,
         )
 
     def test_calls_build_container_with_custom_build_context(self):
@@ -226,6 +237,8 @@ class TestBuildCommand:
             cache_from=None,
             cache_to=None,
             build_secrets=(),
+            build_args={},
+            platform=None,
         )
 
     def test_calls_build_container_with_all_custom_options(self):
@@ -239,6 +252,8 @@ class TestBuildCommand:
             cache_from=None,
             cache_to=None,
             build_secrets=(),
+            build_args={},
+            platform=None,
         )
 
     def test_calls_build_container_with_cache_from(self):
@@ -252,6 +267,8 @@ class TestBuildCommand:
             cache_from=["type=registry,ref=myrepo:cache"],
             cache_to=None,
             build_secrets=(),
+            build_args={},
+            platform=None,
         )
 
     def test_calls_build_container_with_cache_to(self):
@@ -265,6 +282,8 @@ class TestBuildCommand:
             cache_from=None,
             cache_to=["type=local,dest=/tmp/cache"],
             build_secrets=(),
+            build_args={},
+            platform=None,
         )
 
     def test_calls_build_container_with_multiple_cache_flags(self):
@@ -281,6 +300,8 @@ class TestBuildCommand:
             cache_from=["type=registry,ref=a", "type=local,src=/tmp"],
             cache_to=["type=registry,ref=b"],
             build_secrets=(),
+            build_args={},
+            platform=None,
         )
 
     def test_forwards_build_secrets(self):
@@ -294,4 +315,78 @@ class TestBuildCommand:
             cache_from=None,
             cache_to=None,
             build_secrets=["uv_env=/tmp/uv_env"],
+            build_args={},
+            platform=None,
         )
+
+
+class TestTaskBaseImages:
+    """Tasks that bring a base image each run in an image built on it."""
+
+    BASE_A: ClassVar[BaseImage] = BaseImage(
+        ref="registry.example/a:v1", platform="linux/amd64", workdir="/app"
+    )
+    BASE_B: ClassVar[BaseImage] = BaseImage(ref="registry.example/b:v1")
+
+    def _tasks(
+        self, monkeypatch: pytest.MonkeyPatch, bases: dict[str, BaseImage | None]
+    ) -> None:
+        def fake_task(task_id: str, base: BaseImage | None) -> type:
+            class FakeTask:
+                id: str = task_id
+                required_hardware: str | None = None
+                base_image: BaseImage | None = base
+
+                def __init__(self, config: object) -> None:
+                    del config
+
+            return FakeTask
+
+        classes = [fake_task(task_id, base) for task_id, base in bases.items()]
+        monkeypatch.setattr("karotte.load_tasks.load_all_task_classes", lambda: classes)
+
+    def test_builds_one_image_per_distinct_base(self, monkeypatch: pytest.MonkeyPatch):
+        self._tasks(
+            monkeypatch, {"a1": self.BASE_A, "a2": self.BASE_A, "b": self.BASE_B}
+        )
+        with patch("karotte.cli.build.build_container") as mock_build:
+            build(runtime="docker")
+        built = {c.args[2]: c.kwargs for c in mock_build.call_args_list}
+        assert set(built) == {image_tag(self.BASE_A), image_tag(self.BASE_B)}
+        assert built[image_tag(self.BASE_A)]["build_args"] == {
+            "BASE_IMAGE": "registry.example/a:v1",
+            "TASK_WORKDIR": "/app",
+        }
+        assert built[image_tag(self.BASE_A)]["platform"] == "linux/amd64"
+        assert built[image_tag(self.BASE_B)]["platform"] is None
+
+    def test_task_builds_only_its_image(self, monkeypatch: pytest.MonkeyPatch):
+        self._tasks(monkeypatch, {"a": self.BASE_A, "b": self.BASE_B})
+        with patch("karotte.cli.build.build_container") as mock_build:
+            build(runtime="docker", task=["b"])
+        mock_build.assert_called_once()
+        assert mock_build.call_args.args[2] == image_tag(self.BASE_B)
+
+    def test_a_tag_names_one_image_only(self, monkeypatch: pytest.MonkeyPatch):
+        self._tasks(monkeypatch, {"a": self.BASE_A, "b": self.BASE_B})
+        with patch("karotte.cli.build.build_container") as mock_build:
+            with pytest.raises(typer.Exit):
+                build(runtime="docker", tag="mine")
+        mock_build.assert_not_called()
+
+    def test_an_unknown_task_is_refused(self, monkeypatch: pytest.MonkeyPatch):
+        self._tasks(monkeypatch, {"a": self.BASE_A})
+        with pytest.raises(typer.Exit):
+            build(runtime="docker", task=["nope"])
+
+    def test_a_containerfile_without_the_base_arg_is_refused(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ):
+        (tmp_path / "Containerfile").write_text(
+            "FROM docker.io/library/amazonlinux:2023\n"
+        )
+        self._tasks(monkeypatch, {"a": self.BASE_A})
+        with patch("karotte.cli.build.build_container") as mock_build:
+            with pytest.raises(typer.Exit):
+                build(runtime="docker", build_context=str(tmp_path))
+        mock_build.assert_not_called()

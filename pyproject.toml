@@ -52,6 +52,9 @@ gcs = [
 [project.scripts]
 karotte = "karotte.cli:entry"
 
+[project.entry-points."karotte.hardware_limits"]
+harbor = "karotte.harbor.plugins:hardware_limits"
+
 # Supply-chain age-delay (7 days), client-side via uv.
 [tool.uv]
 exclude-newer = "7 days"
@@ -76,6 +79,10 @@ docs = [
 module-name = "karotte"
 source-exclude = [".venv"]
 
+[tool.ruff]
+# DeepSWE's verifier, vendored unmodified: its hash is what makes it known.
+extend-exclude = ["tests/resources/harbor_fixture"]
+
 [tool.ruff.lint]
 select = [
   "E4",
@@ -95,6 +102,7 @@ exclude = [
   "**/__pycache__",
   "**/.*",
   "src/karotte/templates",
+  "tests/resources/harbor_fixture",
   "tmp",
 ]
 reportMissingTypeStubs = false

@@ -18,7 +18,7 @@ from textual.css.query import NoMatches
 from textual.widgets import Footer, Header
 
 from karotte import Runtime
-from karotte.build import get_container_build_command
+from karotte.build import get_container_build_command, task_image_build_options
 from karotte.load_tasks import load_task
 from karotte.run_helpers import (
     clean_up_old_containers,
@@ -327,16 +327,19 @@ class KarotteApp(App[None]):
     def _build_container(
         self,
         runtime: Runtime,
+        run_config: EvaluationRunConfig,
         build_context: str,
         output_callback: Callable[[str], None] | None = None,
     ):
-        """Build the container image."""
+        """Build the image the task runs in."""
+        task = load_task(run_config)
         build_command = get_container_build_command(
             runtime,
             build_context,
             cache_from=self.cache_from,
             cache_to=self.cache_to,
             build_secrets=self.build_secrets,
+            **task_image_build_options(build_context, task.id, task.base_image),
         )
 
         msg = f"Building container image with command: {shlex.join(build_command)}\n"
@@ -397,7 +400,7 @@ class KarotteApp(App[None]):
         # Build container if needed
         if not dev:
             self._build_container(
-                runtime, build_context, output_callback=output_callback
+                runtime, run_configs[0], build_context, output_callback=output_callback
             )
 
         clean_up_old_containers(runtime, [c.run_id for c in run_configs])

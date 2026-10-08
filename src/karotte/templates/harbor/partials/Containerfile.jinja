@@ -1,0 +1,9 @@
+
+# A task's base image: close what the base left open, keep a root-only copy of
+# the task's workdir for grading, and hand the workdir to the student.
+COPY scripts/prepare_task_image.sh /karotte/prepare_task_image.sh
+RUN sh /karotte/prepare_task_image.sh "${TASK_WORKDIR}" && rm /karotte/prepare_task_image.sh
+# The task's PATH at run time, without the harness's uv in front.
+ENV KAROTTE_TASK_WORKDIR=${TASK_WORKDIR} \
+  KAROTTE_QUOTA_DIRS=/logs \
+  PATH=${KAROTTE_TASK_PATH}

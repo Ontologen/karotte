@@ -14,7 +14,12 @@ from loguru import logger
 from pydantic import ValidationError
 
 from karotte import Runtime, staged_mounts
-from karotte.build import build_container, require_builder, require_runtime
+from karotte.build import (
+    build_container,
+    require_builder,
+    require_runtime,
+    task_image_build_options,
+)
 from karotte.container import is_containerized
 from karotte.forwarded_env import EXIT_ON_RUN_ERROR_ENV_VAR
 from karotte.hardware import container_run_args, default_runtime
@@ -36,6 +41,7 @@ from karotte.run_helpers import (
     validate_gvisor_runtime,
 )
 from karotte.schemas.evaluation_run_config import EvaluationRunConfig
+from karotte.task_image import check_harness_home
 
 PROXY_ENTRY_POINT_GROUP = "karotte.default_proxy_url"
 
@@ -351,7 +357,13 @@ def run(
     if runtime == "firecracker" and containerized and not is_containerized():
         from karotte.firecracker.preflight import validate_firecracker_runtime
 
-        validate_firecracker_runtime(load_task(run_config).required_hardware, mount)
+        firecracker_task = load_task(run_config)
+        base = firecracker_task.base_image
+        validate_firecracker_runtime(
+            firecracker_task.required_hardware,
+            mount,
+            platform=base and base.platform,
+        )
 
     if run_config.resolved_rubric_judge_model is not None:
         RubricJudge.default_model = run_config.resolved_rubric_judge_model
@@ -364,6 +376,8 @@ def run(
         from karotte.subprocess import chdir_to_workdir
 
         sanitize_paths_and_reexec()
+        if is_containerized():
+            check_harness_home()
         harden_filesystem()
         staged_mounts.copy_in()
 
@@ -467,12 +481,14 @@ def _run_without_ui(
 
     # Build container if needed
     if not dev:
+        task = load_task(run_configs[0])
         build_container(
             runtime,
             build_context,
             cache_from=cache_from,
             cache_to=cache_to,
             build_secrets=build_secrets,
+            **task_image_build_options(build_context, task.id, task.base_image),
         )
 
     clean_up_old_containers(runtime, [c.run_id for c in run_configs])

@@ -6,6 +6,7 @@ from typing import Any, Final
 
 from karotte.hardware import default_hardware
 from karotte.schemas import EvaluationRunConfig
+from karotte.schemas.base_image import BaseImage
 from karotte.schemas.data_mount import DataMount
 from karotte.step import Step
 
@@ -50,8 +51,8 @@ class Task(ABC, metaclass=_TaskMeta):
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
-        # `system_prompt`, `steps`, `tools`, `required_hardware` and `data_mounts`
-        # are declared as properties here and read as plain values elsewhere (e.g.
+        # `system_prompt`, `steps`, `tools`, `required_hardware`, `data_mounts`
+        # and `base_image` are declared as properties here and read as plain values elsewhere (e.g.
         # `karotte tasks list` serializes them to JSON). Overriding one with a bare
         # `def` — a forgotten @property — is silently accepted by ABCMeta, after
         # which `task.<field>` is a bound method that fails far from the typo with
@@ -122,3 +123,14 @@ class Task(ABC, metaclass=_TaskMeta):
     def data_mounts(self) -> list[DataMount]:
         """Data mounts to attach from the backend's mount registry at runtime."""
         return []
+
+    @property
+    def base_image(self) -> BaseImage | None:
+        """The image this task's sandbox is built on, or ``None`` for the
+        environment's own base.
+
+        Read on the host with a placeholder run config, like
+        ``required_hardware``, so it must not depend on the config. The
+        environment's Containerfile must take the base as ``ARG BASE_IMAGE``.
+        """
+        return None

@@ -61,11 +61,16 @@ def default_hardware() -> str | None:
 
 
 def hardware_limits(hardware: str | None) -> HardwareLimits | None:
-    """What a sandbox on ``hardware`` holds, from the first plugin by entry point name."""
+    """What a sandbox on ``hardware`` holds: the first answer, by entry point
+    name, from a plugin that knows the name. Plugins return ``None`` for names
+    they don't define, so each can own its own."""
     if hardware is None:
         return None
-    limits = next(_plugins(HARDWARE_LIMITS_ENTRY_POINT_GROUP), None)
-    return None if limits is None else limits(hardware)
+    for limits in _plugins(HARDWARE_LIMITS_ENTRY_POINT_GROUP):
+        answer = limits(hardware)
+        if answer is not None:
+            return answer
+    return None
 
 
 def container_run_args(task: _Task, runtime: Runtime) -> list[str]:
