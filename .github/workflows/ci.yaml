@@ -59,6 +59,11 @@ jobs:
         run: |
           sudo chmod o+x /home/runner
           namei -l "$(readlink -f .venv/bin/python)"
+      # On runc a one-shot command gets its network namespace from user
+      # namespaces the demoted user creates. Inside a container that works;
+      # on this bare host Ubuntu's AppArmor policy forbids it, so lift it.
+      - name: Let the demoted test users create user namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       # The sandbox checks OOM-kill a student in a child cgroup. In the runner
       # service's own cgroup, systemd's default OOMPolicy=stop would then stop
       # the runner, so the tests get a scope of their own.
@@ -87,9 +92,11 @@ jobs:
 
   # Harbor tasks end to end on docker, with the fake model: an honest fixture
   # task validates and every attack on the grading scores 0. No API key needed.
+  # On GitHub's Ubuntu runner, so the user namespaces grading relies on are
+  # checked under Ubuntu's AppArmor policy for them.
   harbor-template:
     name: Harbor Template Tests
-    runs-on: karotte-ci
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - name: Check out code

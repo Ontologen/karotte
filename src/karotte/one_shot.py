@@ -199,8 +199,25 @@ def _probe_user_namespaces(uid: int, wrapper: list[str]) -> None:
         raise RuntimeError(
             f"Could not give uid {uid} a network namespace of its own (user namespaces"
             + f" refused?): {result.stderr.decode(errors='replace').strip()}"
+            + _apparmor_hint()
         )
     _probed_user_namespaces.add(uid)
+
+
+def _apparmor_hint() -> str:
+    """Ubuntu 23.10 and later let an unconfined process create a user namespace
+    but not map its uid there, which reads as a bare EPERM."""
+    try:
+        with open("/proc/sys/kernel/apparmor_restrict_unprivileged_userns") as f:
+            restricted = f.read().strip() == "1"
+    except OSError:
+        return ""
+    if not restricted:
+        return ""
+    return (
+        ". AppArmor restricts unprivileged user namespaces here"
+        + " (kernel.apparmor_restrict_unprivileged_userns=1)"
+    )
 
 
 def _enter_loopback_namespace() -> None:
