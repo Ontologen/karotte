@@ -32,6 +32,7 @@ class _CopyState:
     max_total_bytes: int
     max_entries: int
     max_depth: int
+    owner_uid: int | None = None
     total_bytes: int = 0
     entries: int = 0
 
@@ -52,6 +53,7 @@ def save_submission(
     max_total_bytes: int = 1024**3,
     max_entries: int = 10_000,
     max_depth: int = 32,
+    owner_uid: int | None = None,
 ) -> Path:
     """Copy a student submission (file or directory) to `dest` — or, when `dest`
     is omitted, into a fresh directory under `SUBMISSIONS_DIR` that gets
@@ -64,6 +66,11 @@ def save_submission(
 
     Missing submissions are not treated as student misbehavior. It is up to the
     judge to determine how to handle a missing submission.
+
+    With ``owner_uid``, a file someone else owns is misbehavior too. A student
+    can hard-link a file it can't read (a root-only key in sticky ``/tmp``,
+    say) into its submission, and copying as root would read it; the link is
+    still owned by root.
     """
     source = Path(os.path.abspath(source))
     created_dir: Path | None = None
@@ -83,6 +90,7 @@ def save_submission(
         max_total_bytes=max_total_bytes,
         max_entries=max_entries,
         max_depth=max_depth,
+        owner_uid=owner_uid,
     )
 
     try:
@@ -182,6 +190,10 @@ def _copy_file(fd: int, dest: Path, state: _CopyState, rel: str) -> None:
     st = os.fstat(fd)
     if not stat.S_ISREG(st.st_mode):
         raise StudentMisbehaviorError(f"{rel} is not a regular file")
+    if state.owner_uid is not None and st.st_uid != state.owner_uid:
+        raise StudentMisbehaviorError(
+            f"{rel} is owned by uid {st.st_uid}, not the submitter's {state.owner_uid}"
+        )
     if st.st_size > state.max_file_bytes:
         raise StudentMisbehaviorError(
             f"{rel} is too large ({st.st_size} > {state.max_file_bytes} bytes)"

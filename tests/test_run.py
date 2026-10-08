@@ -3,6 +3,7 @@ import os
 import re
 import subprocess
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -162,6 +163,16 @@ class TestFirecrackerLaunchErrors:
         assert sorted(ran) == ["a", "c"]
 
 
+@pytest.fixture
+def task_without_base_image() -> Iterator[None]:
+    """`_run_without_ui` builds the image the configs' task runs in."""
+    with patch(
+        "karotte.cli.run.load_task", return_value=MagicMock(id="t", base_image=None)
+    ):
+        yield
+
+
+@pytest.mark.usefixtures("task_without_base_image")
 class TestRunWithoutUiCache:
     """Test that _run_without_ui forwards cache args to build_container."""
 
@@ -192,6 +203,9 @@ class TestRunWithoutUiCache:
             cache_from=["type=registry,ref=repo:cache"],
             cache_to=None,
             build_secrets=(),
+            tag="karotte",
+            build_args={},
+            platform=None,
         )
 
     @patch("karotte.cli.run.run_containerized")
@@ -216,6 +230,9 @@ class TestRunWithoutUiCache:
             cache_from=None,
             cache_to=["type=local,dest=/tmp/cache"],
             build_secrets=(),
+            tag="karotte",
+            build_args={},
+            platform=None,
         )
 
     @patch("karotte.cli.run.run_containerized")
@@ -241,6 +258,9 @@ class TestRunWithoutUiCache:
             cache_from=["type=registry,ref=a"],
             cache_to=["type=registry,ref=b"],
             build_secrets=(),
+            tag="karotte",
+            build_args={},
+            platform=None,
         )
 
     @patch("karotte.cli.run.run_containerized")
@@ -254,7 +274,14 @@ class TestRunWithoutUiCache:
         )
 
         mock_build.assert_called_once_with(
-            "podman", ".", cache_from=None, cache_to=None, build_secrets=()
+            "podman",
+            ".",
+            cache_from=None,
+            cache_to=None,
+            build_secrets=(),
+            tag="karotte",
+            build_args={},
+            platform=None,
         )
 
     @patch("karotte.cli.run.run_containerized")
@@ -278,6 +305,9 @@ class TestRunWithoutUiCache:
             cache_from=None,
             cache_to=None,
             build_secrets=["uv_env=/tmp/uv_env"],
+            tag="karotte",
+            build_args={},
+            platform=None,
         )
 
     @patch("karotte.cli.run.run_containerized")
@@ -369,7 +399,7 @@ class TestProxyApiKeyFallback:
             model="openai/gpt-5.5",
             mcp_server_config=HttpMcpServerConfig(),
         )
-        mock_task = MagicMock()
+        mock_task = MagicMock(base_image=None)
         with (
             patch("karotte.cli.run.parse_config", return_value=run_config),
             patch("karotte.cli.run.load_task", return_value=mock_task),
@@ -431,7 +461,7 @@ class TestProxyPlaceholderForReferencedKey:
 
     def _run(self, config: str, proxy: str | None) -> MagicMock:
         with (
-            patch("karotte.cli.run.load_task", return_value=MagicMock()),
+            patch("karotte.cli.run.load_task", return_value=MagicMock(base_image=None)),
             patch(
                 "karotte.mcp_servers.http_mcp_server.run_server",
                 return_value=MagicMock(__enter__=MagicMock(), __exit__=MagicMock()),
@@ -529,7 +559,7 @@ class TestConfigFromFlags:
 
     def _run(self, **kwargs: Any) -> EvaluationRunConfig:
         with (
-            patch("karotte.cli.run.load_task", return_value=MagicMock()),
+            patch("karotte.cli.run.load_task", return_value=MagicMock(base_image=None)),
             patch(
                 "karotte.mcp_servers.http_mcp_server.run_server",
                 return_value=MagicMock(__enter__=MagicMock(), __exit__=MagicMock()),
@@ -637,7 +667,7 @@ class TestConfigFromFlags:
         monkeypatch.setenv("ANTHROPIC_API_KEY", "")
         monkeypatch.delenv("ANTHROPIC_API_KEY")
         with (
-            patch("karotte.cli.run.load_task", return_value=MagicMock()),
+            patch("karotte.cli.run.load_task", return_value=MagicMock(base_image=None)),
             patch(
                 "karotte.mcp_servers.http_mcp_server.run_server",
                 return_value=MagicMock(__enter__=MagicMock(), __exit__=MagicMock()),
@@ -677,7 +707,7 @@ class TestUncontainerizedProxyEnv:
 
         with (
             patch("karotte.cli.run.parse_config", return_value=run_config),
-            patch("karotte.cli.run.load_task", return_value=MagicMock()),
+            patch("karotte.cli.run.load_task", return_value=MagicMock(base_image=None)),
             patch(
                 "karotte.mcp_servers.http_mcp_server.run_server",
                 return_value=MagicMock(__enter__=MagicMock(), __exit__=MagicMock()),
@@ -739,7 +769,7 @@ def test_tui_receives_the_cache_options(monkeypatch: pytest.MonkeyPatch):
     )
     with (
         patch("karotte.cli.run.parse_config", return_value=run_config),
-        patch("karotte.cli.run.load_task", return_value=MagicMock()),
+        patch("karotte.cli.run.load_task", return_value=MagicMock(base_image=None)),
         patch("karotte.terminal.app.KarotteApp") as mock_app_cls,
     ):
         mock_app_cls.return_value.run_failed = False
@@ -770,7 +800,7 @@ def test_run_uses_the_preprocessed_config(monkeypatch: pytest.MonkeyPatch):
             "karotte.cli.run.apply_run_config_preprocessors",
             return_value=preprocessed,
         ) as preprocess,
-        patch("karotte.cli.run.load_task", return_value=MagicMock()),
+        patch("karotte.cli.run.load_task", return_value=MagicMock(base_image=None)),
         patch(
             "karotte.mcp_servers.http_mcp_server.run_server",
             return_value=MagicMock(__enter__=MagicMock(), __exit__=MagicMock()),
@@ -805,7 +835,7 @@ def test_the_judges_default_model_comes_from_the_config(
     )
     with (
         patch("karotte.cli.run.parse_config", return_value=parsed),
-        patch("karotte.cli.run.load_task", return_value=MagicMock()),
+        patch("karotte.cli.run.load_task", return_value=MagicMock(base_image=None)),
         patch(
             "karotte.mcp_servers.http_mcp_server.run_server",
             return_value=MagicMock(__enter__=MagicMock(), __exit__=MagicMock()),
@@ -846,7 +876,7 @@ class TestSanitizePathsTiming:
                 "karotte.cli.run.apply_run_config_preprocessors",
                 return_value=run_config,
             ),
-            patch("karotte.cli.run.load_task", return_value=MagicMock()),
+            patch("karotte.cli.run.load_task", return_value=MagicMock(base_image=None)),
             patch(
                 "karotte.mcp_servers.http_mcp_server.run_server",
                 return_value=MagicMock(__enter__=MagicMock(), __exit__=MagicMock()),
@@ -980,6 +1010,7 @@ class TestSanitizePathsCiSkip:
 @patch("karotte.cli.run.run_containerized")
 @patch("karotte.cli.run.clean_up_old_containers")
 @patch("karotte.cli.run.build_container")
+@pytest.mark.usefixtures("task_without_base_image")
 def test_keep_containers_message_uses_the_actual_runtime(
     _mock_build: MagicMock,
     _mock_cleanup: MagicMock,
@@ -1010,7 +1041,7 @@ class TestChownOutputsAfterRun:
                 "karotte.cli.run.apply_run_config_preprocessors",
                 return_value=run_config,
             ),
-            patch("karotte.cli.run.load_task", return_value=MagicMock()),
+            patch("karotte.cli.run.load_task", return_value=MagicMock(base_image=None)),
             patch(
                 "karotte.mcp_servers.http_mcp_server.run_server",
                 return_value=MagicMock(
@@ -1132,6 +1163,7 @@ class TestMissingBuildx:
         buildx.assert_not_called()
 
 
+@pytest.mark.usefixtures("task_without_base_image")
 class TestExitCode:
     """A host-side run exits non-zero when a run ends in an error event; the backend's in-pod run and failed tasks exit 0."""
 
@@ -1153,7 +1185,7 @@ class TestExitCode:
                 "karotte.cli.run.apply_run_config_preprocessors",
                 return_value=run_config,
             ),
-            patch("karotte.cli.run.load_task", return_value=MagicMock()),
+            patch("karotte.cli.run.load_task", return_value=MagicMock(base_image=None)),
             patch(
                 "karotte.mcp_servers.http_mcp_server.run_server",
                 return_value=MagicMock(__enter__=MagicMock(), __exit__=MagicMock()),
@@ -1242,7 +1274,7 @@ class TestExitCode:
         app = MagicMock(run_failed=True)
         with (
             patch("karotte.cli.run.parse_config", return_value=run_config),
-            patch("karotte.cli.run.load_task", return_value=MagicMock()),
+            patch("karotte.cli.run.load_task", return_value=MagicMock(base_image=None)),
             patch(
                 "karotte.cli.run.apply_run_config_preprocessors",
                 return_value=run_config,
@@ -1255,6 +1287,7 @@ class TestExitCode:
         assert exc_info.value.exit_code == 1
 
 
+@pytest.mark.usefixtures("task_without_base_image")
 class TestHostOutputPaths:
     """Containerized runs print /out paths from inside the container; the host prints its own."""
 
@@ -1350,7 +1383,7 @@ class TestHostOutputPaths:
         app.run.side_effect = lambda: self._write_outputs(run_config)
         with (
             patch("karotte.cli.run.parse_config", return_value=run_config),
-            patch("karotte.cli.run.load_task", return_value=MagicMock()),
+            patch("karotte.cli.run.load_task", return_value=MagicMock(base_image=None)),
             patch(
                 "karotte.cli.run.apply_run_config_preprocessors",
                 return_value=run_config,
@@ -1377,7 +1410,7 @@ class TestPluginRefusesTheLaunch:
             patch("karotte.cli.run.require_runtime"),
             patch("karotte.cli.run.require_builder"),
             patch("karotte.cli.run.parse_config", return_value=run_config),
-            patch("karotte.cli.run.load_task", return_value=MagicMock()),
+            patch("karotte.cli.run.load_task", return_value=MagicMock(base_image=None)),
             patch("karotte.cli.run._run_without_ui", side_effect=RuntimeError("ran")),
         ):
             run(config="{}", runtime="docker", no_ui=True)

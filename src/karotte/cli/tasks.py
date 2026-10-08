@@ -37,6 +37,7 @@ def list_tasks(
                 "required_hardware": task.required_hardware,
                 "submission_paths": [str(path) for path in task.submission_paths],
                 "data_mounts": [m.model_dump() for m in task.data_mounts],
+                "base_image": task.base_image and task.base_image.model_dump(),
             }
             for task in tasks
         ]

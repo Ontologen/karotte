@@ -502,10 +502,10 @@ def _kernel_is_not_the_hosts() -> bool:
     return current_sandbox() in (Sandbox.GVISOR, Sandbox.VM)
 
 
-def _confinement_preexec() -> Callable[[], None] | None:
+def _confinement_preexec(uid: int | None = None) -> Callable[[], None] | None:
     from karotte.confinement import get_confinement
 
-    return get_confinement().student_preexec()
+    return get_confinement(uid).student_preexec()
 
 
 def _setuid_flags(uid_gid: int) -> list[str]:
@@ -540,9 +540,13 @@ def student_session_command(
     argv: list[str],
     *chown_fds: int,
     disable_networking: bool,
+    uid: int | None = None,
 ) -> tuple[list[str], Callable[[], None] | None]:
     """The argv to exec for a student session, and the preexec_fn that goes
     with it.
+
+    ``uid`` runs the session as another unprivileged user, such as a grader,
+    under that uid's own confinement; the default is the student.
 
     The two are returned together because they divide one job between them: if
     the session gets a PID namespace, ``unshare`` performs the privilege drop
@@ -559,12 +563,14 @@ def student_session_command(
     chain cannot be born outside it.
     """
     uid_gid = demoted_uid_gid()
+    if uid_gid is not None and uid is not None:
+        uid_gid = uid
     if uid_gid is None or not _pid_namespace_available(uid_gid):
         wrapped = wrap_to_disable_networking(argv) if disable_networking else argv
-        demote_fn = make_demote_fn(*chown_fds)
+        demote_fn = make_demote_fn(*chown_fds, uid_gid=uid_gid)
         if demote_fn is None:
             return wrapped, None
-        join = _confinement_preexec()
+        join = _confinement_preexec(uid_gid)
 
         def _preexec() -> None:
             os.setsid()
@@ -586,7 +592,7 @@ def student_session_command(
         *inner,
     ]
     root_preexec = _make_root_preexec(uid_gid, *chown_fds)
-    join = _confinement_preexec()
+    join = _confinement_preexec(uid_gid)
     if join is None:
         return pidns_argv, root_preexec
 

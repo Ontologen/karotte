@@ -744,6 +744,39 @@ class TestHardenFilesystem:
             *memory_watch.TEMP_DIRS,
         )
 
+    def test_a_tasks_own_workdir_is_promised_too(
+        self, mount: Mount, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """In an image built on a task's base the student owns the task's
+        workdir, so hardening leaves it and the disk quota covers it."""
+        _ = mount("workdir")
+        monkeypatch.setenv(confinement.TASK_WORKDIR_ENV_VAR, "/app")
+
+        assert Path("/app") in confinement._promised_writable()  # pyright: ignore[reportPrivateUsage]
+
+    def test_the_quota_covers_a_tasks_dirs_but_not_external_mounts(
+        self, mount: Mount, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An external harness's exempt mounts stay its own; the quota dirs and
+        the task's workdir are the student's to fill."""
+        workdir = mount("workdir")
+        for name in ("app", "logs", "external"):
+            (workdir.parent / name).mkdir()
+        monkeypatch.setenv(
+            confinement.TASK_WORKDIR_ENV_VAR, str(workdir.parent / "app")
+        )
+        monkeypatch.setenv(confinement.QUOTA_DIRS_ENV_VAR, str(workdir.parent / "logs"))
+        monkeypatch.setenv(
+            confinement.HARDEN_EXEMPT_ENV_VAR, str(workdir.parent / "external")
+        )
+        monkeypatch.setattr(memory_watch, "disk_backed", lambda _path: True)  # pyright: ignore[reportUnknownLambdaType]
+
+        limit = confinement._default_file_limit()  # pyright: ignore[reportPrivateUsage]
+        assert limit is not None
+        assert workdir.parent / "app" in limit.paths
+        assert workdir.parent / "logs" in limit.paths
+        assert workdir.parent / "external" not in limit.paths
+
     def test_a_mount_under_a_promised_directory_is_left_alone(
         self, mount: Mount
     ) -> None:

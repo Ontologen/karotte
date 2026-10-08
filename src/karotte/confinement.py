@@ -161,6 +161,15 @@ HARDEN_EXEMPT_ENV_VAR = "KAROTTE_HARDEN_EXEMPT"
 by an image whose external harness mounts directories the student must write
 to, e.g. its own log directories."""
 
+TASK_WORKDIR_ENV_VAR = "KAROTTE_TASK_WORKDIR"
+"""The directory a task's own work happens in, in an image built on a task's
+base image (see ``karotte.task_image``). The student owns it."""
+
+QUOTA_DIRS_ENV_VAR = "KAROTTE_QUOTA_DIRS"
+"""Extra directories the student's disk quota covers, ``os.pathsep``-separated:
+where root hands out space to uids it runs a task's code as, such as a grader's
+scratch space."""
+
 
 def _promised_writable() -> tuple[Path, ...]:
     """Where an environment hands the student write access on purpose."""
@@ -169,11 +178,13 @@ def _promised_writable() -> tuple[Path, ...]:
         for part in os.environ.get(HARDEN_EXEMPT_ENV_VAR, "").split(os.pathsep)
         if part
     )
+    # A task's own workdir, in an image built on its base: the student owns it.
+    task_workdir = tuple(Path(w) for w in (os.environ.get(TASK_WORKDIR_ENV_VAR),) if w)
     workdir = os.environ.get("KAROTTE_WORKDIR")
     if not workdir:
         logger.warning("KAROTTE_WORKDIR is unset; no workdir is exempt from hardening")
-        return tuple(memory_watch.TEMP_DIRS) + exempt
-    return (Path(workdir),) + tuple(memory_watch.TEMP_DIRS) + exempt
+        return tuple(memory_watch.TEMP_DIRS) + task_workdir + exempt
+    return (Path(workdir),) + tuple(memory_watch.TEMP_DIRS) + task_workdir + exempt
 
 
 class Confinement:
@@ -1005,16 +1016,24 @@ def ensure_default_limits(required_hardware: str | None) -> dict[str, Contract]:
 
 
 def _default_file_limit(required_hardware: str | None = None) -> FileLimit | None:
-    """Everywhere the student can write on real disk, capped at a share of the
-    free space; tmpfs locations are the memory limit's to weigh.
+    """Everywhere the student can write on real disk (the workdir, the temp
+    dirs, a task's own workdir, ``KAROTTE_QUOTA_DIRS``), capped at a share of
+    the free space; tmpfs locations are the memory limit's to weigh.
 
     Capped at a budget chosen outside the sandbox: the launcher's
     (``KAROTTE_DISK_BUDGET_BYTES``), which saw the host's real free space, or
     else the hardware plugin's disk budget. The reading alone is never trusted:
     in a pod it is the node's disk, and a VM's disk can be a sparse file far
     larger than the host behind it."""
-    candidates = [Path(w) for w in (os.environ.get("KAROTTE_WORKDIR"),) if w]
-    candidates += list(memory_watch.TEMP_DIRS)
+    quota_dirs = os.environ.get(QUOTA_DIRS_ENV_VAR, "").split(os.pathsep)
+    candidates = dict.fromkeys(
+        [
+            *[Path(w) for w in (os.environ.get("KAROTTE_WORKDIR"),) if w],
+            *memory_watch.TEMP_DIRS,
+            *[Path(w) for w in (os.environ.get(TASK_WORKDIR_ENV_VAR),) if w],
+            *[Path(d) for d in quota_dirs if d],
+        ]
+    )
     paths = tuple(
         path for path in candidates if path.is_dir() and memory_watch.disk_backed(path)
     )

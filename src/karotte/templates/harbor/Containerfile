@@ -1,0 +1,74 @@
+{% extends "default/Containerfile" %}
+{#- Builds the harness on a task's own image instead of Amazon Linux. `karotte
+    build` passes the task's base as BASE_IMAGE and its workdir as TASK_WORKDIR;
+    each base gets an image of its own. -#}
+{% block base_image -%}
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+USER root
+ENTRYPOINT []
+CMD []
+HEALTHCHECK NONE
+
+# The base's own environment, as the task's processes get it, before anything
+# here changes it. Root's home is /karotte in this image, closed to the student;
+# /root stays the base's, where its toolchains live.
+RUN test ! -e /karotte \
+  && mkdir -m 0700 /karotte \
+  && env -0 > /karotte/task_env \
+  && chmod 0600 /karotte/task_env
+{% endblock %}
+{% block harness_env -%}
+# Build-only, so the harness's uv and Python never shadow the task's at run time.
+ARG UV_VERSION=0.11.32
+ARG UV_INSTALL_DIR=/opt/uv
+ARG UV_CACHE_DIR=/karotte/.cache/uv
+ARG UV_LINK_MODE=copy
+ARG UV_PYTHON_INSTALL_DIR=/opt/uv/python
+ARG TASK_WORKDIR
+
+# PYTHON_VERSION is an ENV, not an ARG: a base's own ENV of that name (the
+# official Python images set one) would win over an ARG.
+#
+# Variables that make an interpreter load code from elsewhere are emptied for
+# the harness, which runs as root: a base may point PYTHONPATH at the task's
+# repository, which the student owns. Empty counts as unset to Python, uv,
+# bash and node. The task's processes get the base's values back (see
+# /karotte/task_env).
+ENV PYTHONPATH= \
+  PYTHONHOME= \
+  PYTHONSTARTUP= \
+  PYTHONUSERBASE= \
+  VIRTUAL_ENV= \
+  BASH_ENV= \
+  ENV= \
+  NODE_OPTIONS= \
+  PERL5LIB= \
+  PERL5OPT= \
+  RUBYOPT= \
+  LD_PRELOAD= \
+  LD_LIBRARY_PATH= \
+  LD_AUDIT= \
+  PYTHONPYCACHEPREFIX= \
+  PYTHONPLATLIBDIR= \
+  GCONV_PATH=
+ENV KAROTTE_CONTAINERIZED=1 \
+  KAROTTE_WORKDIR=/workdir \
+  PYTHONUNBUFFERED=1 \
+  PYTHON_VERSION=3.12.11 \
+  KAROTTE_DEMOTE_ID=1000 \
+  STUDENT_WORKDIR=/workdir \
+  ROOT_WORKDIR=/karotte \
+  HOME=/karotte \
+  KAROTTE_TASK_PATH="$PATH" \
+  PATH="/opt/uv/:$PATH"
+{%- endblock %}
+{% block system_dependencies -%}
+COPY scripts/install_system_deps.sh /tmp/install_system_deps.sh
+RUN sh /tmp/install_system_deps.sh && rm -rf /tmp/install_system_deps.sh /var/tmp/*
+{% endblock %}
+{% block venvs -%}
+# No venvs: the student uses the task's own toolchains.
+{% endblock %}
+{% block student_python_env -%}
+{% endblock %}

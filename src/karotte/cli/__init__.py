@@ -12,8 +12,10 @@ from karotte.cli.check import app as check_app
 from karotte.cli.create_env import create_env
 from karotte.cli.create_run_config import create_run_config
 from karotte.cli.dashboard import dashboard
+from karotte.cli.harbor import app as harbor_app
 from karotte.cli.models import app as models_app
 from karotte.cli.run import run
+from karotte.cli.suite import app as suite_app
 from karotte.cli.tasks import app as tasks_app
 from karotte.cli.templates import app as templates_app
 from karotte.cli.update import update
@@ -68,7 +70,9 @@ app.command()(run)
 app.command()(build)
 app.add_typer(agents_app, name="agents")
 app.add_typer(check_app, name="check")
+app.add_typer(harbor_app, name="harbor")
 app.add_typer(models_app, name="models")
+app.add_typer(suite_app, name="suite")
 app.add_typer(tasks_app, name="tasks")
 app.add_typer(templates_app, name="templates")
 

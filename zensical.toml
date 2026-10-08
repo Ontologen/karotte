@@ -29,10 +29,12 @@ nav = [
     "running/run-lifecycle.md",
     "running/student-resources.md",
     "running/development-loop.md",
+    "running/suites.md",
   ] },
   { "Environments" = [
     "environments/templates.md",
     "environments/language-toolchains.md",
+    "environments/harbor.md",
     "environments/updating.md",
   ] },
   { "Extending Karotte" = [

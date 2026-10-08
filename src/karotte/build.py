@@ -3,14 +3,22 @@
 import os
 import shlex
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from pathlib import Path
 from shutil import which
-from typing import Never
+from typing import Any, Never
 
 import typer
 from loguru import logger
 
 from karotte.runtime import Runtime, get_engine
+from karotte.schemas.base_image import BaseImage
+from karotte.task_image import (
+    ContainerfileMismatchError,
+    build_args,
+    check_containerfile,
+    image_tag,
+)
 
 
 def require_runtime(runtime: Runtime) -> None:
@@ -49,6 +57,8 @@ def build_container(
     cache_from: list[str] | None = None,
     cache_to: list[str] | None = None,
     build_secrets: Sequence[str] = (),
+    build_args: Mapping[str, str] | None = None,
+    platform: str | None = None,
 ) -> None:
     """Build the container image."""
     build_command = get_container_build_command(
@@ -58,6 +68,8 @@ def build_container(
         cache_from=cache_from,
         cache_to=cache_to,
         build_secrets=build_secrets,
+        build_args=build_args,
+        platform=platform,
     )
 
     typer.secho(
@@ -79,6 +91,24 @@ def build_container(
     typer.secho("Environment container image built successfully.", fg=typer.colors.BLUE)
 
 
+def task_image_build_options(
+    build_context: str, task_id: str, base: BaseImage | None
+) -> dict[str, Any]:
+    """The tag, build args and platform of the image a task runs in, after
+    checking the Containerfile builds on a base exactly when the task has one."""
+    containerfile = Path(build_context) / "Containerfile"
+    if containerfile.is_file():
+        try:
+            check_containerfile(containerfile, [(task_id, base)])
+        except ContainerfileMismatchError as e:
+            _exit_with_error(str(e))
+    return {
+        "tag": image_tag(base),
+        "build_args": build_args(base),
+        "platform": base and base.platform,
+    }
+
+
 def get_container_build_command(
     runtime: Runtime,
     build_context: str,
@@ -86,13 +116,20 @@ def get_container_build_command(
     cache_from: list[str] | None = None,
     cache_to: list[str] | None = None,
     build_secrets: Sequence[str] = (),
+    build_args: Mapping[str, str] | None = None,
+    platform: str | None = None,
 ) -> list[str]:
     """Build the command to construct a container image.
 
     Each ``build_secrets`` entry is ``name=path``, mounted in the build as
-    ``/run/secrets/<name>``.
+    ``/run/secrets/<name>``. ``build_args`` become ``--build-arg``; ``platform``
+    builds for a base image that exists for one architecture only.
     """
-    secret_flags = [_secret_flag(s) for s in build_secrets]
+    flags = [_secret_flag(s) for s in build_secrets]
+    for name, value in (build_args or {}).items():
+        flags.extend(["--build-arg", f"{name}={value}"])
+    if platform:
+        flags.extend(["--platform", platform])
 
     engine = get_engine(runtime)
 
@@ -107,7 +144,7 @@ def get_container_build_command(
         return [
             "container",
             "build",
-            *secret_flags,
+            *flags,
             "--file",
             "Containerfile",
             "--tag",
@@ -121,7 +158,7 @@ def get_container_build_command(
     if os.environ.get("CI"):
         command.append("sudo")
 
-    command.extend([engine, "build", *secret_flags])
+    command.extend([engine, "build", *flags])
 
     if engine in ("docker", "nerdctl"):
         # docker and nerdctl default to `Dockerfile`

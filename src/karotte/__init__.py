@@ -14,6 +14,7 @@ from karotte.reclaim import delete_files as delete_files
 from karotte.runtime import Runtime as Runtime
 from karotte.save_artifact import save_artifact as save_artifact
 from karotte.save_submission import save_submission as save_submission
+from karotte.schemas.base_image import BaseImage as BaseImage
 from karotte.schemas.evaluation_run_config import (
     EvaluationRunConfig as EvaluationRunConfig,
 )

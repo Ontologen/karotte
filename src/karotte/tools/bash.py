@@ -35,7 +35,11 @@ import psutil
 from fastmcp.tools.tool import ToolResult
 from karotte import ToolBase
 from karotte.confinement import network_needs_namespace
-from karotte.subprocess import student_env, student_session_command
+from karotte.subprocess import (
+    student_env,
+    student_identity_env,
+    student_session_command,
+)
 from pydantic import BaseModel, Field
 
 # max_output_length only truncates at return time; a flooding command would
@@ -74,6 +78,13 @@ class BashConfig(BaseModel):
     python_venv: str | None = "/workdir/.venv"
     """Venv activated only in the student's bash (VIRTUAL_ENV and PATH), never for root, so a
     student-planted binary in the venv can't shadow a tool the harness runs."""
+    cwd: str | None = None
+    """Directory the student's shell starts in, e.g. a task's repository. Default: the harness's
+    working directory, the student workdir."""
+    env: dict[str, str] | None = None
+    """Variables set in the student's shell on top of its usual environment, e.g. a task image's
+    own. They never reach root's processes, and never override who the student is (HOME, USER,
+    LOGNAME)."""
 
 
 def _bash_tool_result(
@@ -140,6 +151,8 @@ class _BashSession:
         max_output_length: int,
         disable_networking: bool,
         python_venv: str | None,
+        cwd: str | None = None,
+        env: dict[str, str] | None = None,
     ):
         self._process: asyncio.subprocess.Process | None = None
         self._shell_pid: int | None = None
@@ -157,6 +170,8 @@ class _BashSession:
         self.max_output_length: int = max_output_length
         self.disable_networking: bool = disable_networking
         self.python_venv: str | None = python_venv
+        self.cwd: str | None = cwd
+        self.env: dict[str, str] = env or {}
 
     @property
     def _started(self) -> bool:
@@ -176,7 +191,7 @@ class _BashSession:
         # The shell runs as the student, so it needs to be told so (see
         # student_identity_env; without it the session inherits root's HOME) and
         # it must not inherit the harness's credentials (scrub_harness_secrets).
-        env = student_env()
+        env = student_env() | self.env | student_identity_env()
         env.pop("PYTHONSAFEPATH", None)
         if self.python_venv and (Path(self.python_venv) / "pyvenv.cfg").is_file():
             env["VIRTUAL_ENV"] = self.python_venv
@@ -193,6 +208,7 @@ class _BashSession:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=env,
+            cwd=self.cwd,
         )
 
         self._shell_pid = None
@@ -834,6 +850,8 @@ class bash(ToolBase[BashConfig]):
                     max_output_length=self.config.max_output_length,
                     disable_networking=self.config.disable_networking,
                     python_venv=self.config.python_venv,
+                    cwd=self.config.cwd,
+                    env=self.config.env,
                 )
                 await self._session.start()
                 return _bash_tool_result(
@@ -845,6 +863,8 @@ class bash(ToolBase[BashConfig]):
                     max_output_length=self.config.max_output_length,
                     disable_networking=self.config.disable_networking,
                     python_venv=self.config.python_venv,
+                    cwd=self.config.cwd,
+                    env=self.config.env,
                 )
                 await self._session.start()
 

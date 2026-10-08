@@ -260,6 +260,12 @@ class TestGuestInputs:
         )
         assert "--prepare-only" in guest_argv(config, prepare_only=True)
 
+    def test_argv_starts_the_harness_named(self):
+        argv = guest_argv(
+            _config(), prepare_only=False, karotte_bin="/karotte/.venv/bin/karotte"
+        )
+        assert argv[0] == "/karotte/.venv/bin/karotte"
+
     def test_env_keeps_image_env_and_marks_the_vm(
         self, monkeypatch: pytest.MonkeyPatch
     ):
@@ -307,6 +313,12 @@ class TestGuestInputs:
             GuestMount(tmp_path / "src" / "environment", vm.DEV_TARGET),
             GuestMount(tmp_path, "/data"),
         ]
+
+    def test_dev_mounts_at_the_target_named(self, tmp_path: Path):
+        (mount,) = parse_mounts(
+            None, dev=True, build_context=str(tmp_path), dev_target="/karotte/env/"
+        )
+        assert mount.target == "/karotte/env/"
 
     def test_read_write_mounts_are_refused(self, tmp_path: Path):
         with pytest.raises(VmError, match="read-only mounts only"):
@@ -822,6 +834,27 @@ class TestPreflight:
 
         assert preflight.firecracker_problems("cpu-2.6gb", None, kvm=kvm) == []
 
+    @pytest.mark.parametrize("platform", ["linux/amd64", "linux/x86_64"])
+    def test_a_base_image_of_the_host_arch_runs(self, tmp_path: Path, platform: str):
+        kvm = tmp_path / "kvm"
+        kvm.touch()
+
+        assert (
+            preflight.firecracker_problems(
+                "cpu-2.6gb", None, kvm=kvm, platform=platform
+            )
+            == []
+        )
+
+    def test_a_base_image_of_another_arch_is_refused_early(self, tmp_path: Path):
+        kvm = tmp_path / "kvm"
+        kvm.touch()
+
+        (problem,) = preflight.firecracker_problems(
+            "cpu-2.6gb", None, kvm=kvm, platform="linux/arm64"
+        )
+        assert "linux/arm64" in problem and "x86_64" in problem
+
     def test_pasta_is_started_once_to_see_it_works(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
@@ -936,7 +969,9 @@ class TestPreflight:
     ):
         import typer
 
-        def problems(_hardware: str, _mounts: list[str] | None) -> list[str]:
+        def problems(
+            _hardware: str, _mounts: list[str] | None, **_: object
+        ) -> list[str]:
             return ["no KVM"]
 
         monkeypatch.setattr(preflight, "firecracker_problems", problems)
@@ -973,3 +1008,39 @@ class TestWiring:
         with patch("karotte.firecracker.vm.stop_vms") as stop:
             stop_containers("firecracker", ["batch-0"])
         stop.assert_called_once_with(["batch-0"])
+
+
+class TestBaseDriveCache:
+    def _drives(self, directory: Path, count: int) -> list[Path]:
+        drives = [directory / f"{i}.ext4" for i in range(count)]
+        for age, drive in enumerate(reversed(drives)):
+            drive.touch()
+            os.utime(drive, (1000 + age, 1000 + age))
+        return drives  # newest first
+
+    def test_keeps_four_by_default(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.delenv(rootfs.KEEP_BASE_DRIVES_ENV_VAR, raising=False)
+        drives = self._drives(tmp_path, 6)
+        rootfs._evict_old(tmp_path, keep=drives[0])  # pyright: ignore[reportPrivateUsage]
+        assert sorted(p.name for p in tmp_path.iterdir()) == sorted(
+            d.name for d in drives[:4]
+        )
+
+    def test_keeps_as_many_as_configured(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv(rootfs.KEEP_BASE_DRIVES_ENV_VAR, "5")
+        drives = self._drives(tmp_path, 6)
+        rootfs._evict_old(tmp_path, keep=drives[0])  # pyright: ignore[reportPrivateUsage]
+        assert len(list(tmp_path.iterdir())) == 5
+
+    @pytest.mark.parametrize("value", ["0", "-1", "many"])
+    def test_a_bad_setting_is_refused(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str
+    ):
+        monkeypatch.setenv(rootfs.KEEP_BASE_DRIVES_ENV_VAR, value)
+        drives = self._drives(tmp_path, 2)
+        with pytest.raises(rootfs.RootfsError, match="positive integer"):
+            rootfs._evict_old(tmp_path, keep=drives[0])  # pyright: ignore[reportPrivateUsage]

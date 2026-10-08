@@ -1,0 +1,54 @@
+diff --git a/tests/__init__.py b/tests/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/tests/run_junit.py b/tests/run_junit.py
+new file mode 100644
+index 0000000..09606f7
+--- /dev/null
++++ b/tests/run_junit.py
+@@ -0,0 +1,28 @@
++"""Runs the unit tests and writes a JUnit report to argv[1]."""
++
++import sys
++import unittest
++import xml.etree.ElementTree as ET
++
++sys.path.insert(0, ".")
++suite = unittest.defaultTestLoader.discover("tests", top_level_dir=".")
++root = ET.Element("testsuite")
++
++
++def cases(s):
++    for t in s:
++        yield from cases(t) if isinstance(t, unittest.TestSuite) else [t]
++
++
++for case in cases(suite):
++    result = unittest.TestResult()
++    case.run(result)
++    el = ET.SubElement(
++        root,
++        "testcase",
++        classname=f"{type(case).__module__}.{type(case).__name__}",
++        name=case._testMethodName,
++    )
++    for _, trace in result.failures + result.errors:
++        ET.SubElement(el, "failure", message="failed").text = trace
++ET.ElementTree(root).write(sys.argv[1])
+diff --git a/tests/test_calc.py b/tests/test_calc.py
+new file mode 100644
+index 0000000..d7ca1f4
+--- /dev/null
++++ b/tests/test_calc.py
+@@ -0,0 +1,11 @@
++import unittest
++
++from calc import add, negate
++
++
++class TestCalc(unittest.TestCase):
++    def test_add(self):
++        self.assertEqual(add(2, 3), 5)
++
++    def test_negate(self):
++        self.assertEqual(negate(4), -4)

@@ -1,3 +1,4 @@
+import os
 import subprocess
 
 
@@ -13,6 +14,13 @@ def check_permissions():
     )
 
     student_workdir = SHARED_DATA_DIR.parent
+    # Root's private home: /root, or /karotte in an image built on a task's base.
+    root_home = os.environ.get("ROOT_WORKDIR") or "/root"
+    # In an image built on a task's base, the student also owns the task's workdir.
+    writable_roots = "|".join(
+        [str(student_workdir), "/tmp", "/var/tmp", "/usr/tmp"]
+        + [d for d in [os.environ.get("KAROTTE_TASK_WORKDIR")] if d]
+    )
 
     test_script = f"""
 set -e
@@ -24,7 +32,7 @@ runuser -u student -- bash -c '
   echo "test" > {STUDENT_DATA_DIR}/test_write.txt
   cat {STUDENT_DATA_DIR}/test_write.txt | grep -q "test"
   rm {STUDENT_DATA_DIR}/test_write.txt
-  ls -la /workdir/.venv/ > /dev/null
+  if [ -d /workdir/.venv ]; then ls -la /workdir/.venv/ > /dev/null; fi
 '
 echo "PASS: Test 1-2"
 
@@ -185,19 +193,23 @@ echo "PASS: Student can delete own items in workdir"
 # ===== Writable-surface invariant =====
 # Everything the student can write, or owns and could chmod, has to live under
 # the workdir or a temp directory.
-echo "Running test: Student can only write under the workdir and temp dirs"
-writable_surface=$(runuser -u student -- find / \\
-  \\( -path /proc -o -path /sys -o -path /dev \\) -prune -o \\
-  \\( -writable -o -user student \\) \\( -type f -o -type d \\) -print 2>/dev/null \\
-  | grep -vE '^({student_workdir}|/tmp|/var/tmp|/usr/tmp)(/|$)' || true)
-if [ -n "$writable_surface" ]; then
-  echo "FAIL: student-writable paths outside {student_workdir} and the temp dirs:"
-  echo "$writable_surface" | while read -r p; do
-    echo "  $(stat -c '%a %U:%G' "$p") $p"
-  done
-  exit 1
-fi
-echo "PASS: Student can only write under the workdir and temp dirs"
+# The grader, in images that have one, runs code the student wrote and is held
+# to the same surface.
+for user in student $(getent passwd grader > /dev/null && echo grader); do
+  echo "Running test: $user can only write under the workdir and temp dirs"
+  writable_surface=$(runuser -u "$user" -- find / \\
+    \\( -path /proc -o -path /sys -o -path /dev \\) -prune -o \\
+    \\( -writable -o -user "$user" \\) \\( -type f -o -type d \\) -print 2>/dev/null \\
+    | grep -vE '^({writable_roots})(/|$)' || true)
+  if [ -n "$writable_surface" ]; then
+    echo "FAIL: $user-writable paths outside {writable_roots}:"
+    echo "$writable_surface" | while read -r p; do
+      echo "  $(stat -c '%a %U:%G' "$p") $p"
+    done
+    exit 1
+  fi
+  echo "PASS: $user can only write under the workdir and temp dirs"
+done
 
 # The scan above runs as the student, so it stops wherever the student cannot
 # traverse: a world-writable file inside a 0700 directory is invisible to it.
@@ -206,9 +218,9 @@ echo "Running test: Nothing outside the workdir and temp dirs is world-writable"
 world_writable=$(find / \\
   \\( -path /proc -o -path /sys -o -path /dev \\) -prune -o \\
   -perm -002 \\( -type f -o -type d \\) -print 2>/dev/null \\
-  | grep -vE '^({student_workdir}|/tmp|/var/tmp|/usr/tmp)(/|$)' || true)
+  | grep -vE '^({writable_roots})(/|$)' || true)
 if [ -n "$world_writable" ]; then
-  echo "FAIL: world-writable paths outside {student_workdir} and the temp dirs:"
+  echo "FAIL: world-writable paths outside {writable_roots}:"
   echo "$world_writable" | while read -r p; do
     echo "  $(stat -c '%a %U:%G' "$p") $p"
   done
@@ -218,22 +230,22 @@ echo "PASS: Nothing outside the workdir and temp dirs is world-writable"
 
 # ===== No access tests (root data) =====
 echo "Running test 7-10: Root access tests"
-ls -la /root/ > /dev/null
-ls -la /root/.venv/ > /dev/null
+ls -la {root_home}/ > /dev/null
+ls -la {root_home}/.venv/ > /dev/null
 ls -la {ROOT_DATA_DIR}/ > /dev/null
 cat {ROOT_DATA_DIR}/test_permissions.txt | grep -q 'This is secret root data'
 echo "PASS: Test 7-10"
 
-echo "Running test 11: Cannot access /root"
-if runuser -u student -- ls -la /root/ 2>/dev/null; then
-  echo "FAIL: Test 11 - Student user can access /root"
+echo "Running test 11: Cannot access {root_home}"
+if runuser -u student -- ls -la {root_home}/ 2>/dev/null; then
+  echo "FAIL: Test 11 - Student user can access {root_home}"
   exit 1
 fi
 echo "PASS: Test 11"
 
-echo "Running test 12: Cannot access /root/.venv"
-if runuser -u student -- ls -la /root/.venv/ 2>/dev/null; then
-  echo "FAIL: Test 12 - Student user can access /root/.venv"
+echo "Running test 12: Cannot access {root_home}/.venv"
+if runuser -u student -- ls -la {root_home}/.venv/ 2>/dev/null; then
+  echo "FAIL: Test 12 - Student user can access {root_home}/.venv"
   exit 1
 fi
 echo "PASS: Test 12"

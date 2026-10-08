@@ -7,6 +7,7 @@ from typing import Any
 
 from karotte.judges import Judge
 from karotte.schemas import EvaluationRunConfig
+from karotte.schemas.base_image import BaseImage
 from karotte.schemas.data_mount import DataMount
 from karotte.step import Step
 from karotte.task import Task
@@ -36,6 +37,7 @@ def create_task(
     system_prompt: str | None | Callable[[EvaluationRunConfig], str | None],
     required_hardware: str | None = None,
     data_mounts: list[DataMount] | None = None,
+    base_image: BaseImage | None = None,
     configure_tools: Callable[[], None] | None = None,
     pre_hook: Callable[[EvaluationRunConfig], dict[str, Any]] | None = None,
 ) -> type[Task]:
@@ -63,6 +65,9 @@ def create_task(
 
     if required_hardware is not None:
         attributes["required_hardware"] = property(lambda self: required_hardware)
+
+    if base_image is not None:
+        attributes["base_image"] = property(lambda self: base_image)
 
     if configure_tools is not None:
         attributes["configure_tools"] = lambda self, _f=configure_tools: _f()  # pyright: ignore[reportUnknownLambdaType]

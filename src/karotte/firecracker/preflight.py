@@ -30,13 +30,19 @@ from karotte.hardware import vm_size
 KVM_DEVICE = Path("/dev/kvm")
 
 
+_ARCH_NAMES = {"amd64": "x86_64", "arm64": "aarch64"}
+"""Image architecture names as the host calls them."""
+
+
 def firecracker_problems(
     required_hardware: str | None,
     mounts: list[str] | None,
     kvm: Path = KVM_DEVICE,
+    platform: str | None = None,
 ) -> list[str]:
     """What stops a Firecracker run here; empty when nothing does. Downloads
-    the pinned artifacts if they're missing."""
+    the pinned artifacts if they're missing. ``platform`` is the task's base
+    image platform, e.g. ``linux/amd64``: a VM runs its host's architecture only."""
     if not sys.platform.startswith("linux"):
         return ["The firecracker runtime needs Linux with KVM."]
     arch = host_arch()
@@ -44,6 +50,12 @@ def firecracker_problems(
         return [f"The firecracker runtime needs x86_64 or aarch64, not {arch}."]
 
     problems: list[str] = []
+    if platform is not None:
+        image_arch = platform.rpartition("/")[2]
+        if _ARCH_NAMES.get(image_arch, image_arch) != arch:
+            problems.append(
+                f"The task's base image is {platform}; a Firecracker VM here runs {arch} only."
+            )
     if not kvm.exists():
         problems.append(
             f"{kvm} is missing: this host has no KVM (on a cloud VM, enable nested virtualization)."
@@ -161,10 +173,12 @@ def _docker_has_buildkit() -> bool:
 
 
 def validate_firecracker_runtime(
-    required_hardware: str | None, mounts: list[str] | None
+    required_hardware: str | None,
+    mounts: list[str] | None,
+    platform: str | None = None,
 ) -> None:
     """Abort with instructions unless a Firecracker run can start here."""
-    problems = firecracker_problems(required_hardware, mounts)
+    problems = firecracker_problems(required_hardware, mounts, platform=platform)
     if problems:
         _print_and_abort(
             "Cannot use the firecracker runtime:\n  - "

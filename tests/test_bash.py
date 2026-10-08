@@ -1295,6 +1295,37 @@ async def test_session_keeps_venv_on_path_alongside_the_home_fix(
 
 
 @pytest.mark.asyncio
+async def test_session_starts_in_the_configured_directory(
+    bash_tool: bash, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """A task image's agent starts in its repository, not the student workdir."""
+    monkeypatch.setattr(bash_tool.config, "cwd", str(tmp_path))
+
+    result = _parse_result(await bash_tool(command="pwd"))
+
+    assert result["stdout"] == f"{tmp_path}\n"
+
+
+@pytest.mark.asyncio
+async def test_session_gets_the_configured_env_but_keeps_its_identity(
+    bash_tool: bash, monkeypatch: pytest.MonkeyPatch
+):
+    """A task image's variables reach the student's shell; they can't make it
+    someone else."""
+    monkeypatch.setenv("KAROTTE_DEMOTE_ID", str(os.getuid()))
+    monkeypatch.setattr("karotte.tools.bash.student_session_command", _no_preexec)
+    monkeypatch.setattr(
+        bash_tool.config, "env", {"PYTHONPATH": "/app/src", "HOME": "/root"}
+    )
+
+    result = _parse_result(
+        await bash_tool(command="printenv PYTHONPATH; printenv HOME")
+    )
+
+    assert result["stdout"] == f"/app/src\n{pwd.getpwuid(os.getuid()).pw_dir}\n"
+
+
+@pytest.mark.asyncio
 async def test_session_drops_pythonsafepath(
     bash_tool: bash, monkeypatch: pytest.MonkeyPatch
 ):

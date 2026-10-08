@@ -16,7 +16,7 @@ uv run karotte run --config run_config.json
    Karotte checks that the runtime is installed and set up before it goes any further.
    An explicit `--runtime` is checked before step 1, since it doesn't depend on the task.
 3. **Split parallel runs.** With `-n N`, run `i` gets the run id `<run_id>-<i>`, the transcript file `<name>_<i>.json`, and the websocket port plus `i`.
-4. **Build the image** and tag it `karotte`.
+4. **Build the image** the task runs in and tag it: `karotte`, or `karotte-<hash>` for a task with a [base image](../tasks/tasks-and-steps.md#base-image) of its own.
    `--dev` skips this step; see [Development loop](development-loop.md).
 5. **Remove leftover containers** from earlier runs.
    Karotte only removes containers whose names start with `karotte_run_` followed by the longest prefix all the run ids share, so commands with different run ids don't touch each other's containers.

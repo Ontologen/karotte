@@ -33,6 +33,10 @@ build-backend = "uv_build"
 [tool.basedpyright]
 reportImplicitOverride = false
 
+[tool.ruff]
+# Data, not code, even when it's Python: a task's files for the student or grader.
+extend-exclude = ["student_data", "shared_data", "root_data", "intermediate_data"]
+
 [tool.ruff.lint]
 select = [
   "E4",

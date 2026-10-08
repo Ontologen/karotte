@@ -53,6 +53,21 @@ def test_limits_come_from_the_plugin(monkeypatch: pytest.MonkeyPatch):
     assert hardware_limits("huge") is None
 
 
+def test_each_plugin_answers_for_the_names_it_defines(monkeypatch: pytest.MonkeyPatch):
+    """A plugin that doesn't know a name doesn't shadow one that does."""
+
+    def first(hardware: str) -> HardwareLimits | None:
+        return HardwareLimits(cpus=1) if hardware == "small" else None
+
+    def second(hardware: str) -> HardwareLimits | None:
+        return HardwareLimits(cpus=8) if hardware.startswith("harbor-") else None
+
+    register_hardware_plugins(monkeypatch, limits={"a": first, "b": second})
+    assert hardware_limits("small") == HardwareLimits(cpus=1)
+    assert hardware_limits("harbor-c8") == HardwareLimits(cpus=8)
+    assert hardware_limits("huge") is None
+
+
 def test_no_hardware_has_no_limits(monkeypatch: pytest.MonkeyPatch):
     def limits(hardware: str) -> HardwareLimits:
         raise AssertionError(f"asked about {hardware!r}")

@@ -39,8 +39,13 @@ STATUS_PATH = Path("/proc/self/status")
 
 DEFAULT_INCLUDE = (Path("/"),)
 
-DEFAULT_EXCLUDE = (Path("/root"), QUOTA_DIR)
-"""Spared unless the caller says otherwise: root's own files, and the file
+DEFAULT_EXCLUDE = tuple(
+    dict.fromkeys(
+        (Path("/root"), Path(os.environ.get("ROOT_WORKDIR") or "/root"), QUOTA_DIR)
+    )
+)
+"""Spared unless the caller says otherwise: root's own files (in ``/root``, or
+``ROOT_WORKDIR`` in an image built on a task's base), and the file
 quota's upper layers — those hold the same files as the overlays mounted over
 them, and reaching behind a mounted overlay to change its upper layer is not
 something overlayfs supports."""

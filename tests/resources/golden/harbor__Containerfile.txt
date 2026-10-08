@@ -1,0 +1,169 @@
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+USER root
+ENTRYPOINT []
+CMD []
+HEALTHCHECK NONE
+
+# The base's own environment, as the task's processes get it, before anything
+# here changes it. Root's home is /karotte in this image, closed to the student;
+# /root stays the base's, where its toolchains live.
+RUN test ! -e /karotte \
+  && mkdir -m 0700 /karotte \
+  && env -0 > /karotte/task_env \
+  && chmod 0600 /karotte/task_env
+
+# Build-only, so the harness's uv and Python never shadow the task's at run time.
+ARG UV_VERSION=0.11.32
+ARG UV_INSTALL_DIR=/opt/uv
+ARG UV_CACHE_DIR=/karotte/.cache/uv
+ARG UV_LINK_MODE=copy
+ARG UV_PYTHON_INSTALL_DIR=/opt/uv/python
+ARG TASK_WORKDIR
+
+# PYTHON_VERSION is an ENV, not an ARG: a base's own ENV of that name (the
+# official Python images set one) would win over an ARG.
+#
+# Variables that make an interpreter load code from elsewhere are emptied for
+# the harness, which runs as root: a base may point PYTHONPATH at the task's
+# repository, which the student owns. Empty counts as unset to Python, uv,
+# bash and node. The task's processes get the base's values back (see
+# /karotte/task_env).
+ENV PYTHONPATH= \
+  PYTHONHOME= \
+  PYTHONSTARTUP= \
+  PYTHONUSERBASE= \
+  VIRTUAL_ENV= \
+  BASH_ENV= \
+  ENV= \
+  NODE_OPTIONS= \
+  PERL5LIB= \
+  PERL5OPT= \
+  RUBYOPT= \
+  LD_PRELOAD= \
+  LD_LIBRARY_PATH= \
+  LD_AUDIT= \
+  PYTHONPYCACHEPREFIX= \
+  PYTHONPLATLIBDIR= \
+  GCONV_PATH=
+ENV KAROTTE_CONTAINERIZED=1 \
+  KAROTTE_WORKDIR=/workdir \
+  PYTHONUNBUFFERED=1 \
+  PYTHON_VERSION=3.12.11 \
+  KAROTTE_DEMOTE_ID=1000 \
+  STUDENT_WORKDIR=/workdir \
+  ROOT_WORKDIR=/karotte \
+  HOME=/karotte \
+  KAROTTE_TASK_PATH="$PATH" \
+  PATH="/opt/uv/:$PATH"
+
+# Prevents the CWD from being prepended to sys.path when running python. Without this, if the judge's python process
+# happens to have its CWD set to a dir that the student can write to, the student will be able to create modules in
+# that dir that take precedence over the real ones, thus gaining arbitrary code execution.
+ENV PYTHONSAFEPATH=1
+
+COPY scripts/install_system_deps.sh /tmp/install_system_deps.sh
+RUN sh /tmp/install_system_deps.sh && rm -rf /tmp/install_system_deps.sh /var/tmp/*
+
+# Pre-install Python so it's available for all users.
+# uv's CPython ships without a PT_GNU_STACK header, which glibc reads as a
+# request for executable thread stacks: every thread gets an 8MB rwx mapping.
+COPY scripts/clear_execstack.py /tmp/clear_execstack.py
+RUN uv python install --no-bin ${PYTHON_VERSION} \
+  && chmod 0644 ${UV_PYTHON_INSTALL_DIR}/.lock \
+  && uv run --python=${PYTHON_VERSION} /tmp/clear_execstack.py \
+  ${UV_PYTHON_INSTALL_DIR}/cpython-${PYTHON_VERSION}-*/bin/python3 \
+  && chmod 0555 $(readlink -f ${UV_PYTHON_INSTALL_DIR}/cpython-${PYTHON_VERSION}-*/bin/python3) \
+  && rm -rf ${UV_CACHE_DIR} /tmp/uv-*.lock /tmp/clear_execstack.py
+
+# INSTALL EXTRA SYSTEM DEPENDENCIES HERE
+
+# Set up a user for the student.
+# -M: don't create home directry (we create STUDENT_WORKDIR later as root)
+# -d: set home directory in /etc/passwd to STUDENT_WORKDIR
+# Tools use the demote ID to run as the student user, e.g., for executing shell commands.
+RUN groupadd -g ${KAROTTE_DEMOTE_ID} student && \
+  # shadow-utils ships CREATE_MAIL_SPOOL=yes, which would give the student a
+  # file they own and can drop anything into (including executables) at
+  # /var/spool/mail/student. Nothing here wants a mail spool.
+  sed -i 's/^CREATE_MAIL_SPOOL=.*/CREATE_MAIL_SPOOL=no/' /etc/default/useradd && \
+  useradd -M -d ${STUDENT_WORKDIR} -u ${KAROTTE_DEMOTE_ID} -g ${KAROTTE_DEMOTE_ID} student && \
+  gpasswd -d student root 2>/dev/null || true && \
+  # Remove subordinate UID/GID ranges so the student cannot use user namespaces
+  # to remap to a different host UID and bypass iptables uid-owner rules.
+  sed -i '/^student:/d' /etc/subuid /etc/subgid
+
+# Set up the working directory for the student.
+# Root-owned with sticky bit (1777) so the student can create/delete their own
+# entries but cannot rename or remove root-owned entries like /workdir/shared/.
+RUN mkdir -p ${STUDENT_WORKDIR} && chmod 1777 ${STUDENT_WORKDIR}
+
+# No venvs: the student uses the task's own toolchains.
+
+USER student
+WORKDIR ${STUDENT_WORKDIR}
+
+# Copy student data
+COPY --chown=student student_data/ ${STUDENT_WORKDIR}/data/
+
+# Set up the environment
+USER root
+WORKDIR ${ROOT_WORKDIR}
+
+# Create data directories
+RUN mkdir /root_data && chmod 0700 /root_data && \
+  mkdir /intermediate_data && chmod 700 /intermediate_data
+
+# Copy root data
+COPY --chown=root root_data/ /root_data/
+
+# Copy intermediate data
+COPY --chown=root intermediate_data/ /intermediate_data/
+
+# Copy shared data
+COPY --chown=root --chmod=444 shared_data/ ${STUDENT_WORKDIR}/shared/
+
+# Lock down shared directory
+# The student user can read files but cannot modify, delete, or create new files
+RUN chmod 1755 ${STUDENT_WORKDIR}/shared && \
+  find ${STUDENT_WORKDIR}/shared -mindepth 1 -type d -exec chmod 555 {} \;
+
+# Copy vendored karotte if present
+COPY .karotte/ ${ROOT_WORKDIR}/.karotte/
+
+# Install dependencies before environment code for better layer caching. This
+# includes any CLI coding agents named in the manifest: each agent class owns
+# its install recipe and karotte pins the version (a no-op when none are listed).
+COPY pyproject.toml uv.lock .manifest.json ${ROOT_WORKDIR}/
+RUN --mount=type=secret,id=uv_env \
+  if [ -f /run/secrets/uv_env ]; then set -a; . /run/secrets/uv_env; set +a; fi && \
+  uv sync --python=${PYTHON_VERSION} --no-install-package environment && \
+  ${ROOT_WORKDIR}/.venv/bin/karotte agents install --manifest ${ROOT_WORKDIR}/.manifest.json && \
+  chmod 0644 ${ROOT_WORKDIR}/.venv/.lock && \
+  rm -rf ${UV_CACHE_DIR} /tmp/uv-*.lock ${HOME:-/root}/.local/share/uv/credentials
+
+# Install environment
+COPY src/ ${ROOT_WORKDIR}/src/
+RUN --mount=type=secret,id=uv_env \
+  if [ -f /run/secrets/uv_env ]; then set -a; . /run/secrets/uv_env; set +a; fi && \
+  uv pip install . \
+  && rm -rf ${UV_CACHE_DIR} /tmp/uv-*.lock ${HOME:-/root}/.local/share/uv/credentials
+
+
+# Lock down root-only data directories
+# This must be done AFTER all operations that create files in /root
+RUN chmod 0700 ${ROOT_WORKDIR} /root_data /intermediate_data
+
+
+# A task's base image: close what the base left open, keep a root-only copy of
+# the task's workdir for grading, and hand the workdir to the student.
+COPY scripts/prepare_task_image.sh /karotte/prepare_task_image.sh
+RUN sh /karotte/prepare_task_image.sh "${TASK_WORKDIR}" && rm /karotte/prepare_task_image.sh
+# The task's PATH at run time, without the harness's uv in front.
+ENV KAROTTE_TASK_WORKDIR=${TASK_WORKDIR} \
+  KAROTTE_QUOTA_DIRS=/logs \
+  PATH=${KAROTTE_TASK_PATH}
+
+RUN . ${ROOT_WORKDIR}/.venv/bin/activate && karotte check
+
+WORKDIR ${STUDENT_WORKDIR}

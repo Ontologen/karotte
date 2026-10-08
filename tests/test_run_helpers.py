@@ -2,8 +2,9 @@ import json
 import os
 import socket
 import sys
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, final
+from typing import Any, ClassVar, final
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -30,11 +31,13 @@ from karotte.run_helpers import (
     run_non_containerized,
     validate_gvisor_runtime,
 )
-from karotte.runtime import Runtime
+from karotte.runtime import Runtime, get_engine
 from karotte.schemas import RunStatus
+from karotte.schemas.base_image import BaseImage
 from karotte.schemas.evaluation_run_config import EvaluationRunConfig
 from karotte.schemas.transcript import ErrorEvent, TaskCompletedEvent
 from karotte.task import Task
+from karotte.task_image import image_ref, image_tag
 from tests.conftest import register_hardware_plugins
 
 
@@ -2432,7 +2435,9 @@ class TestOutputDirOwnerOnHost:
             update={"transcript_file": str(tmp_path / "out" / "transcript.json")}
         )
         with (
-            patch("karotte.run_helpers.load_task", return_value=MagicMock()),
+            patch(
+                "karotte.run_helpers.load_task", return_value=MagicMock(base_image=None)
+            ),
             patch("karotte.run_helpers.os.chown", record),
         ):
             get_container_run_command(config, "docker", dev=False, keep_container=False)
@@ -2616,3 +2621,44 @@ class TestFirewallSelfTest:
         ):
             _maybe_block_internet()
         assert called == []
+
+
+class TestRunCommandForTaskBaseImage:
+    """A task that brings a base image runs in the image built on it, whose
+    harness lives in /karotte."""
+
+    BASE: ClassVar[BaseImage] = BaseImage(
+        ref="registry.example/task:v1", platform="linux/amd64", workdir="/app"
+    )
+
+    @pytest.fixture(autouse=True)
+    def _task(self) -> Iterator[None]:
+        task = MagicMock(base_image=self.BASE, required_hardware=None)
+        with patch("karotte.run_helpers.load_task", return_value=task):
+            yield
+
+    @pytest.mark.parametrize("runtime", ["docker", "podman"])
+    def test_runs_the_harness_in_the_task_image(
+        self, sample_config: EvaluationRunConfig, runtime: Runtime
+    ):
+        command, _ = get_container_run_command(
+            sample_config, runtime, dev=False, keep_container=False
+        )
+        image = command.index(image_ref(image_tag(self.BASE), get_engine(runtime)))
+        assert command[image + 1] == "/karotte/.venv/bin/karotte"
+        assert "/root/.venv/bin/karotte" not in command
+
+    def test_dev_mounts_into_the_harness_under_karotte(
+        self, sample_config: EvaluationRunConfig, tmp_path: Path
+    ):
+        command, _ = get_container_run_command(
+            sample_config,
+            "docker",
+            dev=True,
+            keep_container=False,
+            build_context=str(tmp_path),
+        )
+        (mount,) = [arg for arg in command if "site-packages/environment" in arg]
+        assert (
+            "target=/karotte/.venv/lib/python3.12/site-packages/environment/" in mount
+        )

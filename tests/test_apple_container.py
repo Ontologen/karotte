@@ -4,7 +4,8 @@ import shutil
 import signal
 import subprocess
 from pathlib import Path
-from typing import Any, final
+from typing import Any, ClassVar, final
+from unittest.mock import MagicMock
 
 import pytest
 import typer
@@ -35,8 +36,10 @@ from karotte.save_artifact import (
     ARTIFACT_DIR_ENV_VAR,
     _artifact_base_dir,  # pyright: ignore[reportPrivateUsage]
 )
+from karotte.schemas.base_image import BaseImage
 from karotte.schemas.evaluation_run_config import EvaluationRunConfig
 from karotte.staged_mounts import STAGED_MOUNTS_ENV_VAR
+from karotte.task_image import image_tag
 from tests.conftest import register_hardware_plugins
 
 
@@ -816,3 +819,45 @@ class TestKillVm:
     def test_refuses_a_container_karotte_did_not_start(self):
         with pytest.raises(AssertionError):
             kill_vm("buildkit", run=self.run(), kill=lambda _pid, _sig: None)
+
+
+class TestTaskBaseImage:
+    """On a task's base, root's 0700 home is /karotte: the mounts whose secrecy
+    rests on it move there, and the task's own image runs."""
+
+    BASE: ClassVar[BaseImage] = BaseImage(
+        ref="registry.example/task:v1", workdir="/app"
+    )
+
+    @pytest.fixture(autouse=True)
+    def _task(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        task = MagicMock(base_image=self.BASE, required_hardware=None)
+        monkeypatch.setattr("karotte.run_helpers.load_task", lambda _config: task)  # pyright: ignore[reportUnknownLambdaType]
+
+    def test_runs_the_harness_in_the_task_image(self, config: EvaluationRunConfig):
+        command = run_command(config)
+        image = command.index(image_tag(self.BASE))
+        assert command[image + 1] == "/karotte/.venv/bin/karotte"
+
+    def test_the_transcript_mounts_under_the_harness_home(
+        self, config: EvaluationRunConfig, tmp_path: Path
+    ):
+        command, updated = get_container_run_command(
+            config, "apple-container", dev=False, keep_container=False
+        )
+        assert (
+            f"type=bind,source={tmp_path / 'out'},target=/karotte/out"
+            in flag_values(command, "--mount")
+        )
+        assert updated.transcript_file == "/karotte/out/transcript.json"
+
+    def test_user_mounts_stage_under_the_harness_home(
+        self, config: EvaluationRunConfig, tmp_path: Path
+    ):
+        data = tmp_path / "data"
+        data.mkdir()
+        command = run_command(config, mounts=[f"{data}:/data:ro"])
+        assert (
+            f"type=bind,source={data},target=/karotte/.karotte_mounts/0,readonly"
+            in (flag_values(command, "--mount"))
+        )

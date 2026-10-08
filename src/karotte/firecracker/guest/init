@@ -25,7 +25,7 @@ log() { echo "karotte-init: $*"; }
 
 python_bin() {
   local p
-  for p in /root/.venv/bin/python3 /usr/local/bin/python3 /usr/bin/python3; do
+  for p in /karotte/.venv/bin/python3 /root/.venv/bin/python3 /usr/local/bin/python3 /usr/bin/python3; do
     if [ -x "$p" ]; then
       echo "$p"
       return
@@ -91,6 +91,12 @@ while IFS='=' read -r key value; do
 done <$IN/guest.conf
 
 echo karotte-vm >/proc/sys/kernel/hostname
+# Link protections, as systemd turns on everywhere else: without them a user can
+# hard-link a file it can't read (a root-only key in sticky /tmp) into a tree
+# root later copies, or plant a link or FIFO there for root to open.
+for f in protected_hardlinks protected_symlinks protected_fifos protected_regular; do
+  echo 1 >/proc/sys/fs/$f
+done
 {
   echo "127.0.0.1 localhost karotte-vm"
   echo "::1 localhost"

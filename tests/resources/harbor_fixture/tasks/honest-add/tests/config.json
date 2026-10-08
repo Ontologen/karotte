@@ -1,0 +1,16 @@
+{
+ "base_commit": "689776aa2f2adb0dfda17b928e844c9d0219ed63",
+ "f2p_node_ids": [
+  "tests.test_calc.TestCalc.test_add"
+ ],
+ "p2p_node_ids": [
+  "tests.test_calc.TestCalc.test_negate"
+ ],
+ "grade": {
+  "format": "junit",
+  "tool_label": "unittest",
+  "reports": [
+   "/logs/verifier/new-junit.xml"
+  ]
+ }
+}
